@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Downtown Luka — Digital Menu</title>
+  <meta name="description" content="Explore Downtown Luka Cyberhub's digital food and bar menu. Browse items, cocktails, craft beers, and main courses in real-time.">
+  
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- Global Stylesheet -->
+  <link rel="stylesheet" href="assets/css/menu.css">
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/jpeg" href="images.jpg">
+</head>
+<body>
+
+  <!-- Top Sticky Navigation -->
+  <nav class="navbar">
+    <div class="navbar-inner" style="position: relative;">
+      <div class="logo-block">
+        <img src="images.jpg" alt="Downtown Luka Logo" class="logo-img" onerror="this.src='https://placehold.co/100x100?text=Luka'">
+        <div>
+          <h2 class="brand-name">Downtown Luka</h2>
+          <span class="brand-est" id="table-number-header">Est. 2011 • Cyberhub</span>
+        </div>
+      </div>
+      
+      <!-- Cart and Order status triggers -->
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-secondary" onclick="toggleTrackingModal()" style="font-size:12px; padding: 6px 12px; display: none;" id="btn-track-trigger">
+          <i class="fas fa-receipt"></i> Track Orders <span class="badge" id="tracking-count-badge" style="background:#ef4444; color:#fff; font-size:10px; border-radius:50%; padding:2px 6px; margin-left:4px; display:none;">0</span>
+        </button>
+        <button class="btn btn-primary" onclick="toggleCartDrawer()" style="font-size:12px; padding: 6px 12px; background:var(--primary); display: none;" id="btn-cart-trigger">
+          <i class="fas fa-shopping-cart"></i> Cart (<span id="cart-count-badge">0</span>)
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Public Menu Container -->
+  <main class="menu-container">
+    
+    <!-- Hero / Welcome Board -->
+    <section class="hero" id="menu-hero">
+      <img src="images.jpg" alt="Downtown Luka Icon Logo" class="hero-logo" onerror="this.src='https://placehold.co/100x100?text=Luka'">
+      <h1 class="hero-title">Downtown Luka</h1>
+      <p class="hero-subtitle">Welcome! Scan at your table to browse our craft brewery selections, signature cocktails, and premium diner menus.</p>
+    </section>
+
+    <!-- Navigation Section Choice (Food vs Bar Entry Cards) -->
+    <section class="section-grid" id="main-section-cards">
+      <div class="section-card section-food" onclick="selectSection('food')">
+        <div class="section-icon"><i class="fas fa-utensils"></i></div>
+        <h3>Food Menu</h3>
+        <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Quick bites, Oriental, Indian tandoor, Mains and breads</p>
+      </div>
+      <div class="section-card section-drinks" onclick="selectSection('drinks')">
+        <div class="section-icon"><i class="fas fa-glass-martini-alt"></i></div>
+        <h3>Drinks & Bar</h3>
+        <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Craft draught beers, signature cocktails, spirits and beverages</p>
+      </div>
+    </section>
+
+    <!-- Main Workspace (Hidden on landing, shown when section selected) -->
+    <div id="menu-workspace" style="display: none;">
+      
+      <!-- Back button and title -->
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <button class="btn btn-secondary" onclick="goBackToLanding()">
+          <i class="fas fa-arrow-left"></i> Back
+        </button>
+        <h2 id="workspace-title" style="text-transform: uppercase; font-size: 20px; border-bottom: 3px solid var(--primary); padding-bottom: 4px;"></h2>
+      </div>
+
+      <!-- Sticky Category Tab Bar (Horizontal Scrollable) -->
+      <div class="category-tabs-wrapper">
+        <div class="category-tabs" id="category-tab-container">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+
+      <!-- Instant Live Search Bar -->
+      <div class="search-wrapper">
+        <div class="search-inner">
+          <i class="fas fa-search search-icon"></i>
+          <input type="text" class="search-input" id="search-box" placeholder="Search dishes, cocktails, ingredients...">
+          <i class="fas fa-times-circle search-icon" id="btn-clear-search" style="display: none; cursor: pointer;"></i>
+        </div>
+      </div>
+
+      <!-- Filter Chips -->
+      <div class="filter-wrapper" id="filter-chip-container">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <!-- Loading Skeletons -->
+      <div id="menu-loading" style="display: none;" class="menu-grid">
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+      </div>
+
+      <!-- Empty State -->
+      <div id="empty-state" style="display: none; text-align: center; padding: 48px 16px; background: #ffffff; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+        <i class="fas fa-search" style="font-size: 40px; color: var(--text-light); margin-bottom: 12px;"></i>
+        <h3 id="empty-state-title">No items found</h3>
+        <p style="color: var(--text-muted); font-size: 14px; margin-top: 8px;">Try searching for something else or clearing the search text.</p>
+      </div>
+
+      <!-- Categories & Items Grid -->
+      <div id="categories-container">
+        <!-- Rendered dynamically -->
+      </div>
+
+    </div>
+
+    <!-- Page Footer Disclaimers -->
+    <footer class="footer-disclaimer">
+      <p>* Government Taxes as applicable. We levy 10% Service Charges.</p>
+      <p style="margin-top: 8px; color: var(--text-light);">Downtown Luka • Cyberhub Gurgaon • Established 2011</p>
+    </footer>
+
+  </main>
+
+  <!-- Detailed Overlay Item Modal -->
+  <div class="modal-overlay" id="item-modal">
+    <div class="modal-content">
+      <button class="modal-close" onclick="closeModal()"><i class="fas fa-times"></i></button>
+      <div class="modal-media-wrapper">
+        <!-- Can be img or video -->
+        <img src="" id="modal-img" class="modal-media" style="display: none;">
+        <video id="modal-video" class="modal-media" autoplay loop muted playsinline style="display: none;"></video>
+      </div>
+      <div class="modal-body">
+        <div class="modal-title-row">
+          <h2 class="modal-title" id="modal-name"></h2>
+          <div id="modal-type-badge"></div>
+        </div>
+        <p class="modal-description" id="modal-desc"></p>
+        <div class="modal-tags" id="modal-tags-container"></div>
+        
+        <!-- Pricing Table (Pegs / Pitches / Portions) -->
+        <div style="margin-top: 16px;">
+          <h4 style="font-size: 14px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">Pricing Options</h4>
+          <table class="price-table">
+            <thead>
+              <tr>
+                <th>Option / Size</th>
+                <th style="text-align: right;">Price (INR)</th>
+              </tr>
+            </thead>
+            <tbody id="modal-price-tbody">
+              <!-- Rendered dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cart slide-over drawer -->
+  <div id="cart-drawer" class="cart-drawer" style="display:none; position: fixed; top: 0; right: 0; width: 380px; max-width: 100%; height: 100%; background: #18181b; border-left: 1px solid rgba(255,255,255,0.1); z-index: 1000; box-shadow: -4px 0 20px rgba(0,0,0,0.5); flex-direction: column; color: #fff;">
+    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center;">
+      <h3 style="margin:0; font-size: 16px;"><i class="fas fa-shopping-cart" style="color:var(--primary); margin-right:8px;"></i>Your Table Order</h3>
+      <button class="btn btn-secondary" onclick="toggleCartDrawer()" style="padding:4px 8px; font-size:12px;"><i class="fas fa-times"></i> Close</button>
+    </div>
+    
+    <div id="cart-items-list" style="flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+      <!-- Populated dynamically -->
+      <div style="text-align:center; color: #9ca3af; margin-top: 40px; font-size: 13px;">Your cart is empty. Add food or bar items to start ordering!</div>
+    </div>
+    
+    <div style="padding: 16px; border-top: 1px solid rgba(255,255,255,0.1); background: #222225;">
+      <div style="display:flex; justify-content:space-between; margin-bottom:12px; font-weight:600; font-size:15px;">
+        <span>Subtotal</span>
+        <span id="cart-subtotal-val">₹0</span>
+      </div>
+      <button class="btn btn-primary" onclick="submitCartOrder()" style="width: 100%; justify-content: center; background: var(--primary); padding: 12px; font-size:14px; font-weight: 600;">
+        <i class="fas fa-paper-plane" style="margin-right:6px;"></i> Send Order to Kitchen
+      </button>
+    </div>
+  </div>
+
+  <!-- Order Tracking slide-over panel -->
+  <div id="tracking-modal" class="cart-drawer" style="display:none; position: fixed; top: 0; right: 0; width: 420px; max-width: 100%; height: 100%; background: #18181b; border-left: 1px solid rgba(255,255,255,0.1); z-index: 1001; box-shadow: -4px 0 20px rgba(0,0,0,0.5); flex-direction: column; color: #fff;">
+    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center;">
+      <h3 style="margin:0; font-size: 16px;"><i class="fas fa-receipt" style="color:var(--primary); margin-right:8px;"></i>Dining Session Status</h3>
+      <button class="btn btn-secondary" onclick="toggleTrackingModal()" style="padding:4px 8px; font-size:12px;"><i class="fas fa-times"></i> Close</button>
+    </div>
+    
+    <div id="tracking-rounds-list" style="flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px;">
+      <!-- Populated dynamically -->
+      <div style="text-align:center; color: #9ca3af; margin-top: 40px; font-size: 13px;">No rounds ordered yet for this table.</div>
+    </div>
+    
+    <div style="padding: 16px; border-top: 1px solid rgba(255,255,255,0.1); background: #222225; display: flex; flex-direction: column; gap: 8px;">
+      <div style="font-size:12px; display: flex; flex-direction: column; gap: 4px; color:#a1a1aa;">
+        <div style="display:flex; justify-content:space-between;"><span>Est. Subtotal</span><span id="tracking-subtotal-val">₹0</span></div>
+        <div style="display:flex; justify-content:space-between;"><span>Service Charge (10%)</span><span id="tracking-service-charge-val">₹0</span></div>
+        <div style="display:flex; justify-content:space-between;"><span>Government Taxes (5%)</span><span id="tracking-tax-val">₹0</span></div>
+        <div style="display:flex; justify-content:space-between; font-size:14px; font-weight:700; color:#fff; border-top: 1px solid rgba(255,255,255,0.1); padding-top:4px; margin-top:2px;">
+          <span>Est. Total Due</span>
+          <span id="tracking-total-val">₹0</span>
+        </div>
+      </div>
+      
+      <button class="btn btn-primary" onclick="requestCustomerCheckout()" style="width: 100%; justify-content: center; background: #8b5cf6; padding: 10px; font-size:13px; font-weight: 600; margin-top:4px; border:none; cursor:pointer;" id="btn-request-checkout">
+        <i class="fas fa-file-invoice-dollar" style="margin-right:6px;"></i> Request Settle Bill
+      </button>
+    </div>
+  </div>
+
+  <style>
+    /* Styling rules for customer ordering */
+    .cart-drawer {
+      animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    @keyframes slideInRight {
+      from { transform: translateX(100%); }
+      to { transform: translateX(0); }
+    }
+    .cart-item-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .cart-qty-ctrl {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .cart-qty-btn {
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: #fff;
+      width: 24px;
+      height: 24px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .cart-qty-btn:hover {
+      background: var(--primary);
+    }
+    .round-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .round-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      padding-bottom: 6px;
+      font-size: 12px;
+    }
+    .status-pill {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .status-pill.received { background: #3b82f6; color: #fff; }
+    .status-pill.preparing { background: #f59e0b; color: #fff; }
+    .status-pill.ready { background: #10b981; color: #fff; }
+    .status-pill.served { background: #6b7280; color: #fff; }
+  </style>
+
+  <!-- Welcome Guest Modal (FR-21) -->
+  <div class="modal" id="welcome-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 1200; align-items: center; justify-content: center;">
+    <div class="form-box" style="width: 400px; max-width: 90%; background: #18181b; color: #fff; padding: 24px; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+      <div style="text-align: center; margin-bottom: 20px;">
+        <img src="images.jpg" alt="Luka Logo" style="width: 65px; height: 65px; border-radius: 50%; margin-bottom: 8px; border: 1px solid rgba(255,255,255,0.2);">
+        <h2 style="font-family:'Outfit', sans-serif; font-size: 20px; color:var(--primary); margin:0;" id="welcome-title">Table Ordering</h2>
+        <p style="font-size: 12px; color:#9ca3af; margin-top:4px;">Welcome to Downtown Luka! Please enter your details to start ordering.</p>
+      </div>
+      
+      <form id="welcome-guest-form" onsubmit="submitWelcomeGuest(event)">
+        <div class="form-group" style="margin-bottom:14px;">
+          <label style="font-size:12px; color:#a1a1aa; display:block; margin-bottom:6px; text-align: left;">Your Name *</label>
+          <input type="text" id="guest-name-input" class="input-control" placeholder="e.g. John Doe" required style="width:100%; padding:10px; background:#27272a; border:1px solid rgba(255,255,255,0.1); color:#fff; border-radius:6px;">
+        </div>
+        
+        <div class="form-group" style="margin-bottom:20px;">
+          <label style="font-size:12px; color:#a1a1aa; display:block; margin-bottom:6px; text-align: left;">Contact Number *</label>
+          <input type="tel" id="guest-phone-input" class="input-control" placeholder="e.g. 9876543210" pattern="[0-9]{10}" title="Please enter a valid 10-digit mobile number" required style="width:100%; padding:10px; background:#27272a; border:1px solid rgba(255,255,255,0.1); color:#fff; border-radius:6px;">
+        </div>
+        
+        <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center; background:var(--primary); padding:12px; font-weight:600; border:none; border-radius:6px; cursor:pointer;">
+          <i class="fas fa-utensils" style="margin-right:6px;"></i> Start Table Order
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Core Scripts -->
+  <script src="assets/js/seed.js"></script>
+  <script src="assets/js/menu.js"></script>
+</body>
+</html>
