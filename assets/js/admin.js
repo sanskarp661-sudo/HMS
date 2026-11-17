@@ -61,13 +61,55 @@ let categories = [];
 let items = [];
 let currentUploadedMedia = []; // temporary holder for item media urls
 
+// If the server says the login has expired (401), clear the local login
+// state and go back to the login screen.
+(function installSessionGuard() {
+  const originalFetch = window.fetch.bind(window);
+  let redirecting = false;
+  window.fetch = function(url, opts) {
+    return originalFetch(url, Object.assign({ credentials: "same-origin" }, opts)).then(res => {
+      const u = typeof url === "string" ? url : (url && url.url) || "";
+      if (res.status === 401 && u.indexOf("/api/login") === -1 && !redirecting &&
+          sessionStorage.getItem("luka_logged_in") === "true") {
+        redirecting = true;
+        clearLocalLogin();
+        alert("Your session has expired. Please log in again.");
+        window.location.reload();
+      }
+      return res;
+    });
+  };
+})();
+
+function clearLocalLogin() {
+  sessionStorage.removeItem("luka_logged_in");
+  sessionStorage.removeItem("luka_logged_user");
+  sessionStorage.removeItem("luka_logged_role");
+}
+
+function showAdminDashboard() {
+  document.getElementById("login-panel").style.display = "none";
+  document.getElementById("admin-dashboard").style.display = "flex";
+  loadData();
+}
+
 document.addEventListener("DOMContentLoaded", () => {
-  // Check login session
-  const isLoggedIn = sessionStorage.getItem("luka_logged_in") === "true";
-  if (isLoggedIn) {
-    document.getElementById("login-panel").style.display = "none";
-    document.getElementById("admin-dashboard").style.display = "flex";
-    loadData();
+  // Confirm the login with the server; the browser's copy alone is not trusted
+  if (sessionStorage.getItem("luka_logged_in") === "true") {
+    fetch("/api/session")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data && data.authenticated === false) {
+          clearLocalLogin();
+          return;
+        }
+        if (data && data.authenticated) {
+          sessionStorage.setItem("luka_logged_user", data.username);
+          sessionStorage.setItem("luka_logged_role", data.role);
+        }
+        showAdminDashboard();
+      })
+      .catch(() => clearLocalLogin());
   }
 
   // Setup drag and drop uploader
@@ -122,10 +164,10 @@ function verifyLogin() {
 }
 
 function logoutAdmin() {
-  sessionStorage.removeItem("luka_logged_in");
-  sessionStorage.removeItem("luka_logged_user");
-  sessionStorage.removeItem("luka_logged_role");
-  window.location.reload();
+  clearLocalLogin();
+  fetch("/api/logout", { method: "POST" })
+    .catch(() => {})
+    .finally(() => window.location.reload());
 }
 
 function switchAdminTab(tab) {
@@ -624,6 +666,15 @@ function resetUserForm() {
   document.getElementById("form-user-title").innerText = "Create New User Profile";
   document.getElementById("btn-save-user").innerText = "Create Profile";
   document.getElementById("user-name-input").disabled = false;
+  const pw = document.getElementById("user-password-input");
+  pw.required = true;
+  pw.placeholder = "Min. 6 characters";
+}
+
+function escapeHTML(str) {
+  return String(str == null ? "" : str).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
 }
 
 function loadUsers() {
@@ -663,14 +714,14 @@ function renderUsersTable() {
 
   usernames.forEach(name => {
     const profile = usersList[name];
-    const role = profile.role || "Staff";
-    const password = profile.password || "";
+    const role = escapeHTML(profile.role || "Staff");
+    name = escapeHTML(name);
 
     const row = document.createElement("tr");
     row.innerHTML = `
       <td style="font-weight:600;"><i class="fas fa-user" style="color:var(--primary); margin-right:6px;"></i>${name}</td>
       <td><span class="status-badge" style="background:rgba(255,255,255,0.08); color:#fff; font-weight:600;">${role}</span></td>
-      <td style="font-family:monospace; font-size:12px; color:var(--text-muted);">${password}</td>
+      <td style="font-size:12px; color:var(--text-muted);"><i class="fas fa-lock" style="margin-right:4px;"></i>Encrypted (hidden)</td>
       <td style="text-align: right; white-space: nowrap;">
         <button class="btn btn-secondary" onclick="editUserProfile('${name}')" style="padding: 6px 10px; font-size:12px;"><i class="fas fa-key"></i> Edit</button>
         <button class="btn btn-danger" onclick="deleteUserProfile('${name}')" style="padding: 6px 10px; font-size:12px;"><i class="fas fa-user-minus"></i> Delete</button>
@@ -692,7 +743,10 @@ function editUserProfile(name) {
   document.getElementById("form-user-title").innerText = `Edit Profile: ${name}`;
   document.getElementById("user-name-input").value = name;
   document.getElementById("user-name-input").disabled = true;
-  document.getElementById("user-password-input").value = profile.password || "";
+  const pw = document.getElementById("user-password-input");
+  pw.value = "";
+  pw.required = false;
+  pw.placeholder = "Leave blank to keep current password";
   document.getElementById("user-role-select").value = profile.role || "Waiter";
   document.getElementById("btn-save-user").innerText = "Update Profile";
 
@@ -707,13 +761,18 @@ function saveUserProfile(e) {
   const password = document.getElementById("user-password-input").value.trim();
   const role = document.getElementById("user-role-select").value;
 
-  if (!username || !password || !role) {
+  if (!username || !role || (!originalName && !password)) {
     window.showToast("All fields are required!", "error");
+    return;
+  }
+  if (password && password.length < 6) {
+    window.showToast("Password must be at least 6 characters.", "error");
     return;
   }
 
   if (originalName) {
-    usersList[originalName] = { password, role };
+    // A blank password tells the server to keep the current one
+    usersList[originalName] = password ? { password, role } : { role };
   } else {
     if (usersList[username]) {
       window.showToast("Username already exists!", "error");
@@ -1121,9 +1180,9 @@ function showTableDetail(tableNo) {
     title.innerHTML = `
       Table ${tableNo} Dining Details
       <div style="font-size:12px; font-weight:normal; color:var(--text-muted); margin-top:4px;">
-        <i class="fas fa-user" style="color:var(--primary); margin-right:4px;"></i>Guest: <strong>${session.customer_name}</strong> 
+        <i class="fas fa-user" style="color:var(--primary); margin-right:4px;"></i>Guest: <strong>${escapeHTML(session.customer_name)}</strong> 
         <span style="margin:0 8px; color:rgba(255,255,255,0.25);">|</span> 
-        <i class="fas fa-phone" style="color:var(--primary); margin-right:4px;"></i>Phone: <strong>${session.customer_phone || 'N/A'}</strong>
+        <i class="fas fa-phone" style="color:var(--primary); margin-right:4px;"></i>Phone: <strong>${escapeHTML(session.customer_phone || 'N/A')}</strong>
       </div>
     `;
   }
@@ -1272,7 +1331,7 @@ function checkoutTable() {
   document.getElementById("bill-meta-info").innerHTML = `
     <strong>Invoice ID:</strong> ${billInvoiceId}<br>
     <strong>Table Number:</strong> Table ${selectedAdminTableNo}<br>
-    <strong>Guest Name:</strong> ${session.customer_name || 'Guest'}<br>
+    <strong>Guest Name:</strong> ${escapeHTML(session.customer_name || 'Guest')}<br>
     <strong>Contact Number:</strong> ${session.customer_phone || 'N/A'}<br>
     <strong>Billing Date:</strong> ${new Date().toLocaleString()}
   `;
@@ -1432,7 +1491,7 @@ function viewHistoricalInvoiceDetails(invoiceId) {
   document.getElementById("bill-meta-info").innerHTML = `
     <strong>Invoice ID:</strong> ${inv.invoice_id}<br>
     <strong>Table Number:</strong> Table ${inv.table_no}<br>
-    <strong>Guest Name:</strong> ${inv.customer_name || 'Guest'}<br>
+    <strong>Guest Name:</strong> ${escapeHTML(inv.customer_name || 'Guest')}<br>
     <strong>Contact Number:</strong> ${inv.customer_phone || 'N/A'}<br>
     <strong>Billing Date:</strong> ${inv.timestamp.replace("T", " ").substring(0, 16)} UTC
   `;

@@ -5,37 +5,48 @@
  * Handles all GET/POST requests routed from /api/* via .htaccess.
  */
 
-// ─── Headers and CORS ────────────────────────────────────────────────────────
+// ─── Headers ────────────────────────────────────────────────────────────────
+// Same-origin only: the site and the API live on the same domain, so no CORS
+// headers are sent. This stops other websites from calling the API with a
+// logged-in staff member's session cookie.
 header("Content-Type: application/json; charset=UTF-8");
-header("Access-Control-Allow-Origin: *");
-header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type, X-Staff-User");
+header("X-Content-Type-Options: nosniff");
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit(0);
 }
 
+// ─── Secure staff session ───────────────────────────────────────────────────
+// Staff identity now comes ONLY from a server-side PHP session created at
+// login. The old X-Staff-User request header is ignored, because anyone
+// could set it to "admin".
+$is_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+    || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+session_name('LUKASESS');
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path'     => '/',
+    'secure'   => $is_https,
+    'httponly' => true,
+    'samesite' => 'Strict',
+]);
+session_start();
+
+// Log a session out after 12 hours of inactivity
+if (isset($_SESSION['last_seen']) && time() - $_SESSION['last_seen'] > 12 * 3600) {
+    $_SESSION = [];
+    session_destroy();
+    session_start();
+}
+$_SESSION['last_seen'] = time();
+
 // ─── Routing ────────────────────────────────────────────────────────────────
 $route = isset($_GET['route']) ? trim($_GET['route'], '/') : '';
 $method = $_SERVER['REQUEST_METHOD'];
 
-// Get staff user header for auditing (case-insensitive and compatible with Apache/FastCGI)
+// Logged-in staff username, or null for customers / anonymous visitors
 function get_staff_user() {
-    if (isset($_SERVER['HTTP_X_STAFF_USER'])) {
-        return urldecode($_SERVER['HTTP_X_STAFF_USER']);
-    }
-    if (function_exists('getallheaders')) {
-        $headers = getallheaders();
-        foreach ($headers as $key => $val) {
-            if (strcasecmp($key, 'X-Staff-User') === 0) {
-                return urldecode($val);
-            }
-        }
-    }
-    if (isset($_SERVER['X_STAFF_USER'])) {
-        return urldecode($_SERVER['X_STAFF_USER']);
-    }
-    return 'System';
+    return isset($_SESSION['staff_user']) ? $_SESSION['staff_user'] : null;
 }
 $staff_user = get_staff_user();
 
@@ -50,7 +61,34 @@ function read_json($filename, $default = []) {
 }
 
 function write_json($filename, $data) {
-    file_put_contents($filename, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    file_put_contents($filename, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+}
+
+// Strip HTML/script from text typed by customers before it is stored and
+// later shown in the admin panel.
+function clean_text($value, $max_len = 60) {
+    $value = is_string($value) ? $value : '';
+    $value = trim(strip_tags($value));
+    $value = preg_replace('/[<>"\'`]/u', '', $value);
+    return mb_substr($value, 0, $max_len);
+}
+
+function clean_phone($value) {
+    return substr(preg_replace('/\D/', '', is_scalar($value) ? (string)$value : ''), 0, 15);
+}
+
+function clean_table_no($value) {
+    return substr(preg_replace('/[^A-Za-z0-9]/', '', is_scalar($value) ? (string)$value : ''), 0, 10);
+}
+
+function mask_phone($phone) {
+    $phone = (string)$phone;
+    if (strlen($phone) <= 4) return $phone;
+    return str_repeat('•', strlen($phone) - 4) . substr($phone, -4);
+}
+
+function is_password_hash($value) {
+    return is_string($value) && password_get_info($value)['algo'] !== null && password_get_info($value)['algo'] !== 0;
 }
 
 function write_audit_log($user, $action) {
@@ -63,23 +101,65 @@ function write_audit_log($user, $action) {
     write_json("audit_log.json", $log);
 }
 
+// Role is re-read from users.json on every request, so a deleted or
+// demoted account loses access immediately.
 function get_user_role($username) {
+    if ($username === null) return null;
     $users = read_json("users.json", []);
     $user_lower = strtolower($username);
     if (isset($users[$user_lower]) && is_array($users[$user_lower])) {
-        return isset($users[$user_lower]['role']) ? $users[$user_lower]['role'] : 'Staff';
+        return isset($users[$user_lower]['role']) ? $users[$user_lower]['role'] : null;
     }
-    return 'Staff';
+    return null;
 }
 
 function require_role($username, $allowed_roles) {
+    if ($username === null) {
+        http_response_code(401);
+        echo json_encode(["status" => "error", "message" => "Please log in again."]);
+        exit;
+    }
     $role = get_user_role($username);
-    if (!in_array($role, $allowed_roles)) {
+    if ($role === null) {
+        // Account was deleted while logged in
+        $_SESSION = [];
+        session_destroy();
+        http_response_code(401);
+        echo json_encode(["status" => "error", "message" => "Your account no longer exists. Please log in again."]);
+        exit;
+    }
+    if (!in_array($role, $allowed_roles, true)) {
         http_response_code(403);
         echo json_encode(["status" => "error", "message" => "Permission denied. Required role: " . implode(" or ", $allowed_roles)]);
         exit;
     }
     return $role;
+}
+
+// Looks up the real name and price of a menu item, so customers cannot send
+// their own prices from the browser.
+function lookup_menu_item($item_id, $variant_label) {
+    static $index = null;
+    if ($index === null) {
+        $index = [];
+        $md = read_json("menu_data.json", []);
+        if (isset($md['items']) && is_array($md['items'])) {
+            foreach ($md['items'] as $it) {
+                if (isset($it['id'])) $index[$it['id']] = $it;
+            }
+        }
+    }
+    if (!isset($index[$item_id])) return null;
+    $item = $index[$item_id];
+    if (isset($item['status']) && $item['status'] !== 'Published') return null;
+    if (isset($item['availability']) && $item['availability'] === "86'd") return null;
+    $variants = isset($item['price_variants']) && is_array($item['price_variants']) ? $item['price_variants'] : [];
+    foreach ($variants as $v) {
+        if (isset($v['label']) && $v['label'] === $variant_label) {
+            return ["id" => $item['id'], "name" => $item['name'], "variant" => $v['label'], "price" => floatval($v['price'])];
+        }
+    }
+    return null;
 }
 
 // ─── API Endpoint Router ────────────────────────────────────────────────────
@@ -91,8 +171,13 @@ switch ($route) {
             echo file_exists("menu_data.json") ? file_get_contents("menu_data.json") : json_encode(["categories" => [], "items" => []]);
         } elseif ($method === 'POST') {
             require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
-            $input = file_get_contents("php://input");
-            file_put_contents("menu_data.json", $input);
+            $input = json_decode(file_get_contents("php://input"), true);
+            if (!is_array($input) || !isset($input['categories'], $input['items']) || !is_array($input['items'])) {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "Invalid menu data."]);
+                exit;
+            }
+            write_json("menu_data.json", ["categories" => $input['categories'], "items" => $input['items']]);
             write_audit_log($staff_user, "Modified Menu Catalog");
             echo json_encode(["status" => "ok"]);
         }
@@ -106,11 +191,27 @@ switch ($route) {
                 if (!is_dir('uploads')) {
                     mkdir('uploads', 0755, true);
                 }
-                $ext = pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION);
-                $filename = 'item-' . time() . '.' . $ext;
+                // Only images and MP4 video are accepted. Anything else
+                // (e.g. a .php script) is rejected, and the file name is
+                // generated by the server.
+                $allowed = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
+                            'webp' => 'image/webp', 'gif' => 'image/gif', 'mp4' => 'video/mp4'];
+                $ext = strtolower(pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION));
+                $mime = function_exists('mime_content_type') ? mime_content_type($_FILES['file']['tmp_name']) : '';
+                if (!isset($allowed[$ext]) || ($mime !== '' && $mime !== $allowed[$ext])) {
+                    http_response_code(400);
+                    echo json_encode(["status" => "error", "message" => "Only JPG, PNG, WEBP, GIF or MP4 files are allowed."]);
+                    exit;
+                }
+                if ($_FILES['file']['size'] > 20 * 1024 * 1024) {
+                    http_response_code(400);
+                    echo json_encode(["status" => "error", "message" => "File is too large (max 20 MB)."]);
+                    exit;
+                }
+                $filename = 'item-' . time() . '-' . bin2hex(random_bytes(4)) . '.' . $ext;
                 $target = 'uploads/' . $filename;
                 if (move_uploaded_file($_FILES['file']['tmp_name'], $target)) {
-                    echo json_encode(["status" => "ok", "url" => $target]);
+                    echo json_encode(["status" => "success", "url" => $target]);
                 } else {
                     http_response_code(500);
                     echo json_encode(["status" => "error", "message" => "Failed to save file"]);
@@ -131,17 +232,58 @@ switch ($route) {
             
             $users = read_json("users.json", []);
             $user_lower = strtolower($username);
-            
-            if (isset($users[$user_lower]) && $users[$user_lower]['password'] === $password) {
+            $ok = false;
+
+            if ($username !== '' && is_string($password) && $password !== '' && isset($users[$user_lower]['password'])) {
+                $stored = $users[$user_lower]['password'];
+                if (is_password_hash($stored)) {
+                    $ok = password_verify($password, $stored);
+                } else {
+                    // Old plain-text password: accept once, then replace it
+                    // with a secure hash automatically.
+                    $ok = hash_equals((string)$stored, $password);
+                    if ($ok) {
+                        $users[$user_lower]['password'] = password_hash($password, PASSWORD_DEFAULT);
+                        write_json("users.json", $users);
+                    }
+                }
+            }
+
+            if ($ok) {
+                session_regenerate_id(true);
+                $_SESSION['staff_user'] = $user_lower;
+                $_SESSION['last_seen'] = time();
+                write_audit_log($user_lower, "Logged in");
                 echo json_encode([
                     "status" => "success",
-                    "username" => $username,
+                    "username" => $user_lower,
                     "role" => $users[$user_lower]['role']
                 ]);
             } else {
+                usleep(500000); // slow down password guessing
                 http_response_code(401);
                 echo json_encode(["status" => "error", "message" => "Invalid username or passcode."]);
             }
+        }
+        break;
+
+    // 3b. POST /api/logout
+    case 'logout':
+        if ($staff_user !== null) {
+            write_audit_log($staff_user, "Logged out");
+        }
+        $_SESSION = [];
+        session_destroy();
+        echo json_encode(["status" => "ok"]);
+        break;
+
+    // 3c. GET /api/session — tells the page whether the login is still valid
+    case 'session':
+        $role = get_user_role($staff_user);
+        if ($staff_user !== null && $role !== null) {
+            echo json_encode(["authenticated" => true, "username" => $staff_user, "role" => $role]);
+        } else {
+            echo json_encode(["authenticated" => false]);
         }
         break;
 
@@ -149,11 +291,52 @@ switch ($route) {
     case 'users':
         if ($method === 'GET') {
             require_role($staff_user, ['Admin']);
-            echo file_exists("users.json") ? file_get_contents("users.json") : json_encode([]);
+            // Passwords are never sent to the browser
+            $users = read_json("users.json", []);
+            $safe = [];
+            foreach ($users as $name => $profile) {
+                $safe[$name] = ["role" => isset($profile['role']) ? $profile['role'] : 'Waiter'];
+            }
+            echo json_encode($safe);
         } elseif ($method === 'POST') {
             require_role($staff_user, ['Admin']);
-            $input = file_get_contents("php://input");
-            file_put_contents("users.json", $input);
+            $input = json_decode(file_get_contents("php://input"), true);
+            if (!is_array($input)) {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "Invalid user data."]);
+                exit;
+            }
+            $existing = read_json("users.json", []);
+            $valid_roles = ['Admin', 'Owner', 'Receptionist', 'Waiter', 'Kitchen'];
+            $new_users = [];
+            foreach ($input as $name => $profile) {
+                $name = strtolower(trim((string)$name));
+                if (!preg_match('/^[a-z0-9._-]{2,32}$/', $name) || !is_array($profile)) continue;
+                $role = isset($profile['role']) && in_array($profile['role'], $valid_roles, true) ? $profile['role'] : 'Waiter';
+                $pw = isset($profile['password']) ? (string)$profile['password'] : '';
+                if ($pw !== '') {
+                    if (strlen($pw) < 6) {
+                        http_response_code(400);
+                        echo json_encode(["status" => "error", "message" => "Password for '$name' must be at least 6 characters."]);
+                        exit;
+                    }
+                    $hash = password_hash($pw, PASSWORD_DEFAULT);
+                } elseif (isset($existing[$name]['password'])) {
+                    $hash = $existing[$name]['password']; // blank = keep current password
+                } else {
+                    http_response_code(400);
+                    echo json_encode(["status" => "error", "message" => "A password is required for new user '$name'."]);
+                    exit;
+                }
+                $new_users[$name] = ["password" => $hash, "role" => $role];
+            }
+            // Never allow the last Admin, or yourself, to be removed or demoted
+            if (!isset($new_users[$staff_user]) || $new_users[$staff_user]['role'] !== 'Admin') {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "You cannot delete or demote your own admin account."]);
+                exit;
+            }
+            write_json("users.json", $new_users);
             write_audit_log($staff_user, "Updated User Configuration Profile database");
             echo json_encode(["status" => "ok"]);
         }
@@ -174,37 +357,73 @@ switch ($route) {
     // 6. GET/POST /api/orders
     case 'orders':
         if ($method === 'GET') {
-            echo file_exists("active_orders.json") ? file_get_contents("active_orders.json") : json_encode([]);
+            $active = read_json("active_orders.json", []);
+            if (get_user_role($staff_user) !== null) {
+                // Logged-in staff see every table
+                echo json_encode((object)$active);
+            } else {
+                // Customers only see their own table, without guest details
+                $table_no = clean_table_no(isset($_GET['table']) ? $_GET['table'] : '');
+                $key = "table_" . $table_no;
+                $out = [];
+                if ($table_no !== '' && isset($active[$key])) {
+                    $out[$key] = [
+                        "table_no" => $active[$key]['table_no'],
+                        "status"   => $active[$key]['status'],
+                        "orders"   => $active[$key]['orders'],
+                    ];
+                }
+                echo json_encode((object)$out);
+            }
         } elseif ($method === 'POST') {
             $input = json_decode(file_get_contents("php://input"), true);
-            $table_no = isset($input['table_no']) ? $input['table_no'] : '';
-            if (empty($table_no)) {
+            $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
+            if ($table_no === '') {
                 http_response_code(400);
                 echo json_encode(["status" => "error", "message" => "Missing table number."]);
                 exit;
             }
-            
+
+            // Rebuild the order from the menu: names and prices come from
+            // menu_data.json, never from the customer's browser.
+            $items = [];
+            $raw_items = isset($input['items']) && is_array($input['items']) ? $input['items'] : [];
+            foreach ($raw_items as $it) {
+                if (!is_array($it)) continue;
+                $found = lookup_menu_item(isset($it['id']) ? (string)$it['id'] : '', isset($it['variant']) ? (string)$it['variant'] : '');
+                $qty = isset($it['quantity']) ? intval($it['quantity']) : 0;
+                if ($found === null || $qty < 1) continue;
+                $found['quantity'] = min($qty, 50);
+                $items[] = $found;
+            }
+            if (count($items) === 0) {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "Your cart has no valid items. Please refresh the menu and try again."]);
+                exit;
+            }
+
             $active = read_json("active_orders.json", []);
             $key = "table_" . $table_no;
-            
+
             if (!isset($active[$key])) {
+                $name = clean_text(isset($input['customer_name']) ? $input['customer_name'] : '');
                 $active[$key] = [
                     "table_no" => $table_no,
                     "session_id" => "sess_" . time(),
-                    "customer_name" => isset($input['customer_name']) ? $input['customer_name'] : 'Guest',
-                    "customer_phone" => isset($input['customer_phone']) ? $input['customer_phone'] : '',
+                    "customer_name" => $name !== '' ? $name : 'Guest',
+                    "customer_phone" => clean_phone(isset($input['customer_phone']) ? $input['customer_phone'] : ''),
                     "status" => "Active",
                     "orders" => []
                 ];
             }
-            
+
             // Add new order round
             $order_id = "ord_" . time() . rand(100, 999);
             $active[$key]['orders'][] = [
                 "order_id" => $order_id,
                 "timestamp" => date("Y-m-d\TH:i:s\Z"),
                 "status" => "Received",
-                "items" => isset($input['items']) ? $input['items'] : []
+                "items" => $items
             ];
             
             write_json("active_orders.json", $active);
@@ -254,12 +473,12 @@ switch ($route) {
     case 'orders/request-checkout':
         if ($method === 'POST') {
             $input = json_decode(file_get_contents("php://input"), true);
-            $table_no = isset($input['table_no']) ? $input['table_no'] : '';
-            
+            $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
+
             $active = read_json("active_orders.json", []);
             $key = "table_" . $table_no;
-            
-            if (isset($active[$key])) {
+
+            if ($table_no !== '' && isset($active[$key])) {
                 $active[$key]['status'] = 'Checkout Requested';
                 write_json("active_orders.json", $active);
                 write_audit_log("Customer", "Table $table_no requested final bill settlement");
@@ -311,7 +530,8 @@ switch ($route) {
             $svc_charge = round($subtotal * 0.10, 2);
             $tax = round($subtotal * 0.05, 2);
             $total = $subtotal + $svc_charge + $tax;
-            $invoice_id = "INV-" . time() . rand(10, 99);
+            // Unguessable ID, so people cannot browse other customers' bills
+            $invoice_id = "INV-" . time() . "-" . strtoupper(bin2hex(random_bytes(4)));
             
             $invoice = [
                 "invoice_id" => $invoice_id,
@@ -374,7 +594,11 @@ switch ($route) {
             $invoice_id = isset($_GET['id']) ? trim($_GET['id']) : '';
             $invoices = read_json("invoices.json", []);
             foreach ($invoices as $inv) {
-                if ($inv['invoice_id'] === $invoice_id) {
+                if ($invoice_id !== '' && $inv['invoice_id'] === $invoice_id) {
+                    // Public e-bill link: hide most of the phone number
+                    if (isset($inv['customer_phone'])) {
+                        $inv['customer_phone'] = mask_phone($inv['customer_phone']);
+                    }
                     echo json_encode($inv);
                     exit;
                 }
@@ -659,8 +883,11 @@ switch ($route) {
     // 20. POST /api/log-error
     case 'log-error':
         if ($method === 'POST') {
-            $input = file_get_contents("php://input");
-            file_put_contents("client_errors.log", "[" . date("Y-m-d H:i:s") . "] " . $input . "\n", FILE_APPEND);
+            // Cap the size and keep the log from growing without limit
+            $input = substr(file_get_contents("php://input"), 0, 4000);
+            if (!file_exists("client_errors.log") || filesize("client_errors.log") < 5 * 1024 * 1024) {
+                file_put_contents("client_errors.log", "[" . date("Y-m-d H:i:s") . "] " . str_replace(["\r", "\n"], " ", $input) . "\n", FILE_APPEND | LOCK_EX);
+            }
             echo json_encode(["status" => "ok"]);
         }
         break;

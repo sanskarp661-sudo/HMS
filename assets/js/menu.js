@@ -791,7 +791,7 @@ let activeRounds = [];
 function pollOrderTracking() {
   if (!window.activeTableNo) return;
 
-  fetch(`/api/orders`)
+  fetch(`/api/orders?table=${encodeURIComponent(window.activeTableNo)}`)
     .then(res => res.json())
     .then(data => {
       const tableKey = `table_${window.activeTableNo}`;

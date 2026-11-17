@@ -3,6 +3,29 @@
 
 RewriteEngine On
 
+# ─── Security: block direct download of private files ───────────────────────
+# users.json (passwords), invoices.json / active_orders.json / sms_sent.json
+# (customer names and phone numbers), logs, scripts and dev files can only be
+# read through api.php, never by typing the file name in a browser.
+<FilesMatch "\.(json|log|py|pyc|ps1|md|txt|zip|pdf|sh|bak|sql)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Block hidden files (.git, .gitignore, .htaccess, .env …)
+RewriteRule (^|/)\. - [F,L]
+
+# Block the Python dev-server cache folder
+RewriteRule ^__pycache__(/|$) - [F,L]
+
+# No folder listings
+Options -Indexes
+
 # Redirect /api/anything to api.php?route=anything
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d

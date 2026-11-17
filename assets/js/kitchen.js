@@ -11,6 +11,45 @@ let kdsTimerHandle  = null;
 let kdsCountHandle  = null;
 let kdsElapsedHandles = {};    // { orderId: intervalHandle }
 
+function kdsEscape(str) {
+  return String(str == null ? "" : str).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+function kdsClearLocalLogin() {
+  sessionStorage.removeItem("luka_logged_in");
+  sessionStorage.removeItem("luka_logged_user");
+  sessionStorage.removeItem("luka_logged_role");
+}
+
+// If the server says the login has expired (401), return to the login gate
+(function installSessionGuard() {
+  const originalFetch = window.fetch.bind(window);
+  let redirecting = false;
+  window.fetch = function(url, opts) {
+    return originalFetch(url, Object.assign({ credentials: "same-origin" }, opts)).then(res => {
+      const u = typeof url === "string" ? url : (url && url.url) || "";
+      if (res.status === 401 && u.indexOf("/api/login") === -1 && !redirecting &&
+          sessionStorage.getItem("luka_logged_in") === "true") {
+        redirecting = true;
+        kdsClearLocalLogin();
+        alert("Your session has expired. Please log in again.");
+        location.reload();
+      }
+      return res;
+    });
+  };
+})();
+
+function kdsShowApp(user) {
+  document.getElementById("kds-login").style.display  = "none";
+  document.getElementById("kds-app").style.display    = "flex";
+  document.getElementById("kds-staff-name").textContent = user;
+  kdsStartRefreshLoop();
+  kdsLoadOrders();
+}
+
 // ─── Init ────────────────────────────────────────────────────────────────────
 (function init() {
   const stored = sessionStorage.getItem("luka_logged_in");
@@ -20,11 +59,15 @@ let kdsElapsedHandles = {};    // { orderId: intervalHandle }
   const allowedRoles = ["Admin", "Owner", "Kitchen"];
 
   if (stored === "true" && allowedRoles.includes(role)) {
-    document.getElementById("kds-login").style.display  = "none";
-    document.getElementById("kds-app").style.display    = "flex";
-    document.getElementById("kds-staff-name").textContent = user;
-    kdsStartRefreshLoop();
-    kdsLoadOrders();
+    // Confirm the login with the server before showing orders
+    fetch("/api/session")
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data && data.authenticated === false) { kdsClearLocalLogin(); return; }
+        if (data && data.authenticated && !allowedRoles.includes(data.role)) { kdsClearLocalLogin(); return; }
+        kdsShowApp(data && data.username ? data.username : user);
+      })
+      .catch(() => kdsClearLocalLogin());
   }
   // else: show login gate (default)
 })();
@@ -48,7 +91,7 @@ function kdsLogin() {
   })
   .then(r => r.json())
   .then(data => {
-    if (data.status === "ok") {
+    if (data.status === "ok" || data.status === "success") {
       const allowedRoles = ["Admin", "Owner", "Kitchen"];
       if (!allowedRoles.includes(data.role)) {
         errEl.textContent = "Access denied: Kitchen role required.";
@@ -70,10 +113,10 @@ function kdsLogin() {
 }
 
 function kdsLogout() {
-  sessionStorage.removeItem("luka_logged_in");
-  sessionStorage.removeItem("luka_logged_user");
-  sessionStorage.removeItem("luka_logged_role");
-  location.reload();
+  kdsClearLocalLogin();
+  fetch("/api/logout", { method: "POST" })
+    .catch(() => {})
+    .finally(() => location.reload());
 }
 
 // ─── DATA LOADING ────────────────────────────────────────────────────────────
@@ -175,7 +218,7 @@ function kdsCardHTML(o) {
     <div class="kds-card-body">
       <div class="kds-guest">
         <i class="fas fa-user"></i>
-        ${o.customer_name || "Guest"} &nbsp;·&nbsp;
+        ${kdsEscape(o.customer_name || "Guest")} &nbsp;·&nbsp;
         <i class="fas fa-hashtag" style="font-size:10px"></i>${o.order_id}
       </div>
       <div class="kds-items">${itemsHTML}</div>

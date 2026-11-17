@@ -1,26 +1,26 @@
 {
-  "admin": {
-    "password": "admin123",
-    "role": "Admin"
-  },
-  "khushi": {
-    "password": "khushi",
-    "role": "Admin"
-  },
-  "manager": {
-    "password": "luka2011",
-    "role": "Owner"
-  },
-  "rahul": {
-    "password": "rahulpass",
-    "role": "Waiter"
-  },
-  "neha": {
-    "password": "nehapass",
-    "role": "Receptionist"
-  },
-  "chef": {
-    "password": "kitchen123",
-    "role": "Kitchen"
-  }
+    "admin": {
+        "password": "$2y$10$s5trLxueIp8jb9x\/HoLr1.CHK8SVycw8RcwC736LOrEy3omUbHmKm",
+        "role": "Admin"
+    },
+    "khushi": {
+        "password": "$2y$10$TUBZAqpKW1Uu93HE78p4s.P67VN9vdHDoQY.\/Dti\/fxicYAVfyBLK",
+        "role": "Admin"
+    },
+    "manager": {
+        "password": "$2y$10$e0DJSyTxTq3vLdxP3QYYyOJOf9hZhpQUWQZZuIDxJTUU4iUe9F23y",
+        "role": "Owner"
+    },
+    "rahul": {
+        "password": "$2y$10$9wGVboHys2fLVt0NVcTbzea09aRFimCd4lbqvnaHtf0LxcpAW9vU.",
+        "role": "Waiter"
+    },
+    "neha": {
+        "password": "$2y$10$e\/GHhMi97CE9T.DCj7ULz.fZ997Z3FJrkjU\/Lah8ijEebjxKXZid2",
+        "role": "Receptionist"
+    },
+    "chef": {
+        "password": "$2y$10$n435chwvMf1gnsEyH1qzD.GcTioUPW8Doe2Eu57rGDVi.GLnGG1W.",
+        "role": "Kitchen"
+    }
 }
