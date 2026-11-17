@@ -124,6 +124,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupNav();
   setupMediaUploader();
   setupAdjustTypeToggle();
+  setupPOFilter();
   document.addEventListener("keydown", e => {
     if (e.key === "Escape") {
       const open = [...document.querySelectorAll(".modal-backdrop.open")].pop();
@@ -217,6 +218,7 @@ async function startApp(username, role) {
   const fromHash = (location.hash || "").replace("#", "");
   switchAdminTab(allowedTabs().includes(fromHash) ? fromHash : allowedTabs()[0]);
   startOrdersPolling();
+  if (allowedTabs().includes("purchasing")) refreshPOBadge();
 }
 
 async function loadPublicSettings() {
@@ -238,6 +240,7 @@ const TABS = {
   items:      { section: "sec-items",         title: "Menu Items",       roles: ["Admin", "Owner", "Receptionist", "Waiter"],       onOpen: () => renderAdminItems() },
   categories: { section: "sec-categories",    title: "Categories",       roles: ["Admin", "Owner"],                                 onOpen: () => renderAdminCategories() },
   inventory:  { section: "sec-inventory",     title: "BOM & Inventory",  roles: ["Admin", "Owner", "Receptionist"], needsBom: true, onOpen: () => loadInventory() },
+  purchasing: { section: "sec-purchasing",    title: "Purchasing",       roles: ["Admin", "Owner", "Receptionist"], needsBom: true, onOpen: () => loadPurchasing() },
   users:      { section: "sec-users",         title: "Users",            roles: ["Admin"],                                          onOpen: () => loadUsers() },
   logs:       { section: "sec-logs",          title: "Audit Log",        roles: ["Admin", "Owner"],                                 onOpen: () => loadAuditLogs() },
   settings:   { section: "sec-settings",      title: "Settings",         roles: ["Admin"],                                          onOpen: () => loadSettings() },
@@ -1308,7 +1311,8 @@ function loadInventory() {
       const notice = document.getElementById("bom-mode-notice");
       notice.className = `notice ${low ? "warn" : ""}`;
       notice.innerHTML = `<i class="fas ${low ? "fa-triangle-exclamation" : "fa-circle-info"}"></i><div>` +
-        (low ? `<b>${low} material${low > 1 ? "s are" : " is"} at or below the reorder level.</b> ` : "") +
+        (low ? `<b>${low} material${low > 1 ? "s are" : " is"} at or below the reorder level.</b> ` +
+          (canEdit ? `<a href="#purchasing" onclick="event.preventDefault(); goLowStockPO();" style="font-weight:700;color:inherit;text-decoration:underline;">Create a purchase order</a>. ` : "") : "") +
         `Stock is deducted automatically using each item's recipe.` +
         (canEdit ? "" : " You can record stock received; Admins and Owners manage materials and recipes.") + `</div>`;
       const recipesTab = document.querySelector('#sec-inventory .tab[data-subtab="recipes"]');
@@ -1668,4 +1672,523 @@ function saveSettings(e) {
     })
     .catch(err => window.showToast(err.message, "error"))
     .finally(() => { btn.disabled = false; });
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Purchasing: suppliers, purchase orders and goods receipt
+   ════════════════════════════════════════════════════════════════════════ */
+
+let suppliers = [];
+let purchaseOrders = [];
+let poFilter = "open";
+
+const PO_OPEN = ["Draft", "Ordered", "Partially Received"];
+const PO_BADGE = {
+  "Draft": "", "Ordered": "badge-info", "Partially Received": "badge-warning",
+  "Received": "badge-success", "Cancelled": "badge-danger", "Closed": "badge-violet"
+};
+
+function canEditPurchasing() {
+  return ["Admin", "Owner"].includes(currentRole());
+}
+
+function todayISO() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+function formatDate(d) {
+  if (!d) return "—";
+  const dt = new Date(d.length === 10 ? d + "T00:00:00" : d);
+  return isNaN(dt) ? escapeHTML(d) : dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function poPendingValue(po) {
+  return (po.lines || []).reduce((s, l) => s + Math.max(0, l.qty - l.received_qty) * l.rate, 0) * (1 + (po.tax_pct || 0) / 100);
+}
+
+function isOverdue(po) {
+  return ["Ordered", "Partially Received"].includes(po.status) && po.expected_date && po.expected_date < todayISO();
+}
+
+function setupPOFilter() {
+  document.querySelectorAll("#po-filter button").forEach(b => b.addEventListener("click", () => {
+    poFilter = b.dataset.f;
+    document.querySelectorAll("#po-filter button").forEach(x => x.classList.toggle("active", x === b));
+    renderPOs();
+  }));
+}
+
+function refreshPOBadge() {
+  api("/api/purchase-orders").then(list => {
+    purchaseOrders = Array.isArray(list) ? list : [];
+    updatePOBadge();
+  }).catch(() => {});
+}
+
+function updatePOBadge() {
+  const n = purchaseOrders.filter(p => ["Ordered", "Partially Received"].includes(p.status)).length;
+  const badge = document.getElementById("nav-po-badge");
+  badge.textContent = n;
+  badge.classList.toggle("hidden", n === 0);
+}
+
+function loadPurchasing() {
+  document.querySelectorAll("#sec-purchasing .po-edit-only").forEach(el => el.classList.toggle("hidden", !canEditPurchasing()));
+  return Promise.all([api("/api/suppliers"), api("/api/purchase-orders"), api("/api/inventory")])
+    .then(([sups, pos, inv]) => {
+      suppliers = Array.isArray(sups) ? sups : [];
+      purchaseOrders = Array.isArray(pos) ? pos : [];
+      inventory = inv && Array.isArray(inv.materials) ? inv : { materials: [] };
+      updatePOBadge();
+      renderPOStats();
+      renderPOs();
+      renderSuppliers();
+    })
+    .catch(err => { document.getElementById("po-tbody").innerHTML = emptyRow(8, escapeHTML(err.message)); });
+}
+
+function switchPurchasingTab(tab) {
+  document.querySelectorAll("#sec-purchasing .tab").forEach(t => t.classList.toggle("active", t.dataset.ptab === tab));
+  document.querySelectorAll("#sec-purchasing .subpage").forEach(p => p.classList.toggle("active", p.id === `pur-${tab}`));
+}
+
+function renderPOStats() {
+  const open = purchaseOrders.filter(p => ["Ordered", "Partially Received"].includes(p.status));
+  const drafts = purchaseOrders.filter(p => p.status === "Draft").length;
+  const overdue = open.filter(isOverdue).length;
+  const monthKey = new Date().toISOString().slice(0, 7);
+  const receivedMonth = purchaseOrders.reduce((s, p) => s + (p.receipts || [])
+    .filter(r => (r.timestamp || "").slice(0, 7) === monthKey)
+    .reduce((a, r) => a + (Number(r.value) || 0) * (1 + (p.tax_pct || 0) / 100), 0), 0);
+  const low = inventory.materials.filter(m => Number(m.stock) <= Number(m.reorder_level)).length;
+  const cards = [
+    { icon: "fa-truck", label: "Awaiting delivery", value: open.length, fg: "#3f7cac", bg: "#e3eef7" },
+    { icon: "fa-indian-rupee-sign", label: "Value on order", value: inr(open.reduce((s, p) => s + poPendingValue(p), 0)), fg: "#2f5d5c", bg: "#e7efee" },
+    { icon: "fa-clock", label: "Overdue deliveries", value: overdue, fg: overdue ? "#c95b5b" : "#4f9d69", bg: overdue ? "#f9e6e6" : "#e4f3e9" },
+    { icon: "fa-file-pen", label: "Drafts", value: drafts, fg: "#6b7776", bg: "#f0eee8" },
+    { icon: "fa-box-open", label: "Purchased this month", value: inr(receivedMonth), fg: "#d97e4a", bg: "#fbeee5" },
+    { icon: "fa-triangle-exclamation", label: "Low-stock materials", value: low, fg: low ? "#b45309" : "#4f9d69", bg: low ? "#fef3c7" : "#e4f3e9" },
+  ];
+  document.getElementById("po-stats").innerHTML = cards.map(c => `
+    <div class="stat-card">
+      <div class="stat-icon" style="background:${c.bg};color:${c.fg};"><i class="fas ${c.icon}"></i></div>
+      <div style="min-width:0;"><div class="stat-value">${c.value}</div><div class="stat-label">${c.label}</div></div>
+    </div>`).join("");
+}
+
+function renderPOs() {
+  const tbody = document.getElementById("po-tbody");
+  const q = (document.getElementById("po-search").value || "").trim().toLowerCase();
+  const list = purchaseOrders.filter(p => {
+    if (poFilter === "open" && !PO_OPEN.includes(p.status)) return false;
+    if (poFilter === "Draft" && p.status !== "Draft") return false;
+    if (poFilter === "closed" && PO_OPEN.includes(p.status)) return false;
+    return !q || p.po_number.toLowerCase().includes(q) || (p.supplier_name || "").toLowerCase().includes(q);
+  });
+  if (!list.length) {
+    const msg = purchaseOrders.length ? "No purchase orders in this view."
+      : (canEditPurchasing() ? 'No purchase orders yet. Click <b>New PO</b>, or <b>PO for low stock</b> to order everything that is running low.' : "No purchase orders yet.");
+    tbody.innerHTML = emptyRow(8, msg);
+    return;
+  }
+  tbody.innerHTML = list.map(p => {
+    const ordered = p.lines.reduce((s, l) => s + l.qty, 0);
+    const got = p.lines.reduce((s, l) => s + Math.min(l.qty, l.received_qty), 0);
+    const pct = ordered ? Math.round((got / ordered) * 100) : 0;
+    const canReceive = ["Ordered", "Partially Received"].includes(p.status);
+    return `<tr>
+      <td data-label="PO" class="mono" style="font-size:12.5px;font-weight:700;color:var(--primary);">${escapeHTML(p.po_number)}</td>
+      <td data-label="Supplier" class="strong">${escapeHTML(p.supplier_name)}</td>
+      <td data-label="Created" class="muted nowrap" style="font-size:13px;">${formatDate(p.created_at)}</td>
+      <td data-label="Expected" class="nowrap" style="font-size:13px;${isOverdue(p) ? "color:var(--danger);font-weight:700;" : ""}">${formatDate(p.expected_date)}${isOverdue(p) ? " · late" : ""}</td>
+      <td data-label="Items">${p.lines.length}</td>
+      <td data-label="Total" class="amount">${inr(p.total)}</td>
+      <td data-label="Status"><span style="display:flex;flex-direction:column;gap:5px;align-items:flex-end;"><span class="badge ${PO_BADGE[p.status] || ""}">${escapeHTML(p.status)}</span>${p.status === "Partially Received" ? `<span class="progress" style="width:80px;"><span style="width:${pct}%"></span></span>` : ""}</span></td>
+      <td class="actions">
+        ${canReceive ? `<button class="btn btn-success btn-sm" onclick="openGRN('${jsArg(p.id)}')"><i class="fas fa-box-open"></i> Receive</button>` : ""}
+        ${p.status === "Draft" && canEditPurchasing() ? `<button class="btn btn-secondary btn-sm" onclick="openPOForm('${jsArg(p.id)}')"><i class="fas fa-pen"></i> Edit</button>` : ""}
+        <button class="btn btn-ghost btn-sm" onclick="openPOView('${jsArg(p.id)}')"><i class="fas fa-eye"></i> View</button>
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+/* Suppliers */
+function renderSuppliers() {
+  const tbody = document.getElementById("supplier-tbody");
+  if (!suppliers.length) {
+    tbody.innerHTML = emptyRow(6, canEditPurchasing() ? "No suppliers yet. Click <b>Add supplier</b> to create one." : "No suppliers yet.");
+    return;
+  }
+  tbody.innerHTML = [...suppliers].sort((a, b) => a.name.localeCompare(b.name)).map(sp => {
+    const open = purchaseOrders.filter(p => p.supplier_id === sp.id && PO_OPEN.includes(p.status)).length;
+    return `<tr>
+      <td data-label="Supplier" class="strong">${escapeHTML(sp.name)}</td>
+      <td data-label="Contact">${escapeHTML(sp.contact || "—")}</td>
+      <td data-label="Phone">${sp.phone ? `<a href="tel:${escapeHTML(sp.phone)}">${escapeHTML(sp.phone)}</a>` : "—"}</td>
+      <td data-label="GSTIN" class="mono" style="font-size:12.5px;">${escapeHTML(sp.gstin || "—")}</td>
+      <td data-label="Open POs">${open}</td>
+      <td class="actions">${canEditPurchasing() ? `
+        <button class="btn btn-secondary btn-sm" onclick="openPOForm(null, null, '${jsArg(sp.id)}')"><i class="fas fa-plus"></i> PO</button>
+        <button class="btn btn-ghost btn-sm" onclick="openSupplierForm('${jsArg(sp.id)}')" aria-label="Edit"><i class="fas fa-pen"></i></button>
+        <button class="btn btn-danger-soft btn-sm" onclick="deleteSupplier('${jsArg(sp.id)}')" aria-label="Delete"><i class="fas fa-trash"></i></button>` : ""}
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+function openSupplierForm(id) {
+  const sp = id ? suppliers.find(x => x.id === id) : null;
+  document.getElementById("supplier-modal-title").textContent = sp ? `Edit: ${sp.name}` : "Add supplier";
+  document.getElementById("sup-id").value = sp ? sp.id : "";
+  ["name", "contact", "phone", "email", "gstin", "address"].forEach(k => {
+    document.getElementById(`sup-${k}`).value = sp ? (sp[k] || "") : "";
+  });
+  openModal("supplier-modal");
+}
+
+function saveSupplier(e) {
+  e.preventDefault();
+  const supplier = { id: document.getElementById("sup-id").value || undefined };
+  ["name", "contact", "phone", "email", "gstin", "address"].forEach(k => { supplier[k] = document.getElementById(`sup-${k}`).value.trim(); });
+  api("/api/suppliers", { method: "POST", body: { action: "save", supplier } })
+    .then(() => { closeModal("supplier-modal"); window.showToast("Supplier saved.", "success"); loadPurchasing(); })
+    .catch(err => window.showToast(err.message, "error"));
+}
+
+function deleteSupplier(id) {
+  const sp = suppliers.find(x => x.id === id);
+  if (!sp || !confirm(`Delete supplier "${sp.name}"?`)) return;
+  api("/api/suppliers", { method: "POST", body: { action: "delete", id } })
+    .then(() => { window.showToast("Supplier deleted.", "info"); loadPurchasing(); })
+    .catch(err => window.showToast(err.message, "error"));
+}
+
+/* Purchase order editor */
+function openPOForm(id, prefillLines, supplierId) {
+  if (!suppliers.length) {
+    window.showToast("Add a supplier first.", "warning");
+    switchPurchasingTab("suppliers");
+    openSupplierForm();
+    return;
+  }
+  if (!inventory.materials.length) {
+    window.showToast("Add raw materials in BOM & Inventory first.", "warning");
+    return;
+  }
+  const po = id ? purchaseOrders.find(p => p.id === id) : null;
+  document.getElementById("po-modal-title").textContent = po ? `Edit ${po.po_number}` : "New purchase order";
+  document.getElementById("po-id").value = po ? po.id : "";
+  document.getElementById("po-supplier").innerHTML = '<option value="">Choose supplier…</option>' +
+    [...suppliers].sort((a, b) => a.name.localeCompare(b.name)).map(sp => `<option value="${escapeHTML(sp.id)}">${escapeHTML(sp.name)}</option>`).join("");
+  document.getElementById("po-supplier").value = po ? po.supplier_id : (supplierId || (suppliers.length === 1 ? suppliers[0].id : ""));
+  document.getElementById("po-expected").value = po ? (po.expected_date || "") : "";
+  document.getElementById("po-expected").min = todayISO();
+  document.getElementById("po-tax").value = po ? String(po.tax_pct || 0) : "0";
+  document.getElementById("po-notes").value = po ? (po.notes || "") : "";
+  document.getElementById("po-lines").innerHTML = "";
+  const lines = po ? po.lines : (prefillLines || []);
+  if (lines.length) lines.forEach(l => addPOLine(l.material_id, l.qty, l.rate));
+  else addPOLine();
+  updatePOTotals();
+  closeModal("po-view-modal");
+  openModal("po-modal");
+}
+
+function addPOLine(materialId = "", qty = "", rate = "") {
+  const opts = [...inventory.materials].sort((a, b) => a.name.localeCompare(b.name))
+    .map(m => `<option value="${escapeHTML(m.id)}" ${m.id === materialId ? "selected" : ""}>${escapeHTML(m.name)}${Number(m.stock) <= Number(m.reorder_level) ? " (low)" : ""}</option>`).join("");
+  const m = materialById(materialId);
+  const row = document.createElement("div");
+  row.className = "po-line";
+  row.innerHTML = `
+    <select class="select mat" aria-label="Material" onchange="onPOMaterialChange(this)"><option value="">Choose material…</option>${opts}</select>
+    <div class="qty-wrap"><input type="number" class="input qty" min="0" step="any" placeholder="Qty" value="${escapeHTML(qty)}" oninput="updatePOTotals()" aria-label="Quantity"><span class="unit">${m ? escapeHTML(m.unit) : ""}</span></div>
+    <input type="number" class="input rate" min="0" step="any" placeholder="Rate" value="${escapeHTML(rate === "" && m ? m.cost_per_unit : rate)}" oninput="updatePOTotals()" aria-label="Rate per unit">
+    <div class="amt">₹0</div>
+    <button type="button" class="btn btn-icon btn-danger-soft rm" onclick="this.closest('.po-line').remove(); updatePOTotals();" aria-label="Remove line"><i class="fas fa-xmark"></i></button>`;
+  document.getElementById("po-lines").appendChild(row);
+  updatePOTotals();
+}
+
+function onPOMaterialChange(sel) {
+  const row = sel.closest(".po-line");
+  const m = materialById(sel.value);
+  row.querySelector(".unit").textContent = m ? m.unit : "";
+  if (m && !row.querySelector(".rate").value) row.querySelector(".rate").value = m.cost_per_unit || "";
+  updatePOTotals();
+}
+
+function readPOLines() {
+  return [...document.querySelectorAll("#po-lines .po-line")].map(r => ({
+    material_id: r.querySelector(".mat").value,
+    qty: parseFloat(r.querySelector(".qty").value) || 0,
+    rate: parseFloat(r.querySelector(".rate").value) || 0,
+  }));
+}
+
+function updatePOTotals() {
+  let subtotal = 0;
+  document.querySelectorAll("#po-lines .po-line").forEach(r => {
+    const amt = (parseFloat(r.querySelector(".qty").value) || 0) * (parseFloat(r.querySelector(".rate").value) || 0);
+    subtotal += amt;
+    r.querySelector(".amt").textContent = inr(amt);
+  });
+  const pct = parseFloat(document.getElementById("po-tax").value) || 0;
+  const tax = round2(subtotal * pct / 100);
+  document.getElementById("po-totals").innerHTML =
+    `<div class="row"><span>Subtotal</span><span>${inr(subtotal)}</span></div>` +
+    `<div class="row"><span>GST (${pct}%)</span><span>${inr(tax)}</span></div>` +
+    `<div class="row total"><span>Total</span><span>${inr(subtotal + tax)}</span></div>`;
+}
+
+function savePO(e) {
+  e.preventDefault();
+  const place = e.submitter && e.submitter.dataset.place === "1";
+  const lines = readPOLines().filter(l => l.material_id && l.qty > 0);
+  if (!lines.length) {
+    window.showToast("Add at least one material with a quantity.", "error");
+    return;
+  }
+  const po = {
+    id: document.getElementById("po-id").value || undefined,
+    supplier_id: document.getElementById("po-supplier").value,
+    expected_date: document.getElementById("po-expected").value,
+    tax_pct: parseFloat(document.getElementById("po-tax").value) || 0,
+    notes: document.getElementById("po-notes").value.trim(),
+    lines,
+  };
+  api("/api/purchase-orders", { method: "POST", body: { action: "save", po } })
+    .then(res => place
+      ? api("/api/purchase-orders", { method: "POST", body: { action: "place", id: res.po.id } })
+      : res)
+    .then(res => {
+      closeModal("po-modal");
+      window.showToast(place ? `${res.po.po_number} placed with ${res.po.supplier_name}.` : `${res.po.po_number} saved as draft.`, "success");
+      return loadPurchasing().then(() => openPOView(res.po.id));
+    })
+    .catch(err => window.showToast(err.message, "error"));
+}
+
+function createPOFromLowStock() {
+  const low = inventory.materials.filter(m => Number(m.stock) <= Number(m.reorder_level) && Number(m.reorder_level) > 0);
+  if (!low.length) {
+    window.showToast("Nothing is below its reorder level right now.", "info");
+    return;
+  }
+  // Order enough to get back to twice the reorder level
+  const lines = low.map(m => ({
+    material_id: m.id,
+    qty: Math.max(Math.round((Number(m.reorder_level) * 2 - Number(m.stock)) * 1000) / 1000, Number(m.reorder_level)),
+    rate: m.cost_per_unit || ""
+  }));
+  openPOForm(null, lines);
+  window.showToast(`${lines.length} low-stock material${lines.length > 1 ? "s" : ""} added — check quantities and choose a supplier.`, "info");
+}
+
+/* Purchase order details */
+function openPOView(id) {
+  const po = purchaseOrders.find(p => p.id === id);
+  if (!po) return;
+  const sp = suppliers.find(x => x.id === po.supplier_id) || { name: po.supplier_name };
+  document.getElementById("po-view-title").innerHTML = `${escapeHTML(po.po_number)} <span class="badge ${PO_BADGE[po.status] || ""}" style="margin-left:6px;vertical-align:middle;">${escapeHTML(po.status)}</span>`;
+  const meta = [
+    ["Supplier", escapeHTML(sp.name) + (sp.phone ? `<br><span class="muted" style="font-weight:500;">${escapeHTML(sp.phone)}</span>` : "")],
+    ["Created", `${formatDate(po.created_at)}<br><span class="muted" style="font-weight:500;">by ${escapeHTML(po.created_by)}</span>`],
+    ["Expected delivery", formatDate(po.expected_date) + (isOverdue(po) ? ' <span class="badge badge-danger">Late</span>' : "")],
+    ["Value", inr(po.total)],
+  ];
+  const rows = po.lines.map(l => {
+    const pending = Math.max(0, round2(l.qty - l.received_qty));
+    const pct = l.qty ? Math.min(100, Math.round((l.received_qty / l.qty) * 100)) : 0;
+    return `<tr>
+      <td data-label="Material" class="strong">${escapeHTML(l.name)}</td>
+      <td data-label="Ordered" class="nowrap">${fmtQty(l.qty)} ${escapeHTML(l.unit)}</td>
+      <td data-label="Rate" class="nowrap">${inr(l.rate)}</td>
+      <td data-label="Amount" class="nowrap">${inr(l.qty * l.rate)}</td>
+      <td data-label="Received" class="nowrap"><span style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">${fmtQty(l.received_qty)} <span class="progress" style="width:60px;"><span style="width:${pct}%"></span></span></span></td>
+      <td data-label="Pending" class="nowrap ${pending > 0 && ["Ordered", "Partially Received"].includes(po.status) ? "stock-low" : "muted"}">${["Cancelled", "Closed"].includes(po.status) && pending > 0 ? `${fmtQty(pending)} ${escapeHTML(l.unit)} (cancelled)` : `${fmtQty(pending)} ${escapeHTML(l.unit)}`}</td>
+    </tr>`;
+  }).join("");
+  const receipts = (po.receipts || []).map(r => `<li><b>${inr(r.value)}</b> received${r.bill_no ? ` · bill ${escapeHTML(r.bill_no)}` : ""}<br>
+      <span>${r.lines.map(l => `${escapeHTML(l.name)} ${fmtQty(l.qty)} ${escapeHTML(l.unit)}`).join(", ")}</span>${r.note ? `<br><i class="muted">${escapeHTML(r.note)}</i>` : ""}
+      <div class="when">${formatDateTime(r.timestamp)} · ${escapeHTML(r.user)}</div></li>`).join("");
+  const history = [...(po.history || [])].reverse().map(h => `<li>${escapeHTML(h.action)}<div class="when">${formatDateTime(h.timestamp)} · ${escapeHTML(h.user)}</div></li>`).join("");
+
+  document.getElementById("po-view-body").innerHTML = `
+    <div class="po-meta">${meta.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join("")}</div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="table-wrap cards">
+        <table class="table responsive">
+          <thead><tr><th>Material</th><th>Ordered</th><th>Rate</th><th>Amount</th><th>Received</th><th>Pending</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="po-totals" style="margin-top:0;">
+      <div class="row"><span>Subtotal</span><span>${inr(po.subtotal)}</span></div>
+      <div class="row"><span>GST (${po.tax_pct}%)</span><span>${inr(po.tax)}</span></div>
+      <div class="row total"><span>Total</span><span>${inr(po.total)}</span></div>
+    </div>
+    ${po.notes ? `<div class="notice" style="margin:16px 0 0;"><i class="fas fa-note-sticky"></i><div>${escapeHTML(po.notes)}</div></div>` : ""}
+    <div class="grid-2-even" style="margin-top:20px;">
+      <div><h4 style="font-size:14px;margin-bottom:10px;">Deliveries</h4>${receipts ? `<ul class="timeline">${receipts}</ul>` : '<p class="muted" style="font-size:13px;">Nothing received yet.</p>'}</div>
+      <div><h4 style="font-size:14px;margin-bottom:10px;">History</h4><ul class="timeline">${history}</ul></div>
+    </div>`;
+
+  const edit = canEditPurchasing();
+  const a = [`<button class="btn btn-secondary" onclick="printPO('${jsArg(po.id)}')"><i class="fas fa-print"></i> Print / PDF</button>`];
+  if (po.status === "Draft" && edit) {
+    a.push(`<button class="btn btn-danger-soft" onclick="deletePO('${jsArg(po.id)}')"><i class="fas fa-trash"></i> Delete</button>`);
+    a.push(`<button class="btn btn-secondary" onclick="openPOForm('${jsArg(po.id)}')"><i class="fas fa-pen"></i> Edit</button>`);
+    a.push(`<button class="btn btn-primary" onclick="placePO('${jsArg(po.id)}')"><i class="fas fa-paper-plane"></i> Place order</button>`);
+  }
+  if (["Ordered", "Partially Received"].includes(po.status)) {
+    if (edit) a.push(`<button class="btn btn-danger-soft" onclick="cancelPO('${jsArg(po.id)}')"><i class="fas fa-ban"></i> ${po.status === "Partially Received" ? "Close short" : "Cancel order"}</button>`);
+    a.push(`<button class="btn btn-success" onclick="openGRN('${jsArg(po.id)}')"><i class="fas fa-box-open"></i> Receive goods</button>`);
+  }
+  document.getElementById("po-view-actions").innerHTML = a.join("");
+  openModal("po-view-modal");
+}
+
+function poAction(body, msg) {
+  return api("/api/purchase-orders", { method: "POST", body })
+    .then(res => {
+      window.showToast(msg, "success");
+      closeModal("po-view-modal");
+      return loadPurchasing().then(() => { if (res && res.po) openPOView(res.po.id); });
+    })
+    .catch(err => window.showToast(err.message, "error"));
+}
+
+function placePO(id) {
+  const po = purchaseOrders.find(p => p.id === id);
+  if (!po || !confirm(`Place ${po.po_number} with ${po.supplier_name}? It can no longer be edited after this.`)) return;
+  poAction({ action: "place", id }, `${po.po_number} placed.`);
+}
+
+function cancelPO(id) {
+  const po = purchaseOrders.find(p => p.id === id);
+  if (!po) return;
+  const partial = po.status === "Partially Received";
+  const reason = prompt(partial
+    ? `Close ${po.po_number} short? Stock already received stays; the pending quantity is cancelled.\n\nReason (optional):`
+    : `Cancel ${po.po_number}?\n\nReason (optional):`, "");
+  if (reason === null) return;
+  poAction({ action: "cancel", id, reason }, partial ? `${po.po_number} closed.` : `${po.po_number} cancelled.`);
+}
+
+function deletePO(id) {
+  const po = purchaseOrders.find(p => p.id === id);
+  if (!po || !confirm(`Delete draft ${po.po_number}?`)) return;
+  api("/api/purchase-orders", { method: "POST", body: { action: "delete", id } })
+    .then(() => { window.showToast("Draft deleted.", "info"); closeModal("po-view-modal"); loadPurchasing(); })
+    .catch(err => window.showToast(err.message, "error"));
+}
+
+/* Goods receipt */
+function openGRN(id) {
+  const po = purchaseOrders.find(p => p.id === id);
+  if (!po) return;
+  document.getElementById("grn-po-id").value = id;
+  document.getElementById("grn-title").textContent = `Receive goods · ${po.po_number}`;
+  document.getElementById("grn-bill").value = "";
+  document.getElementById("grn-note").value = "";
+  document.getElementById("grn-lines").innerHTML = po.lines.map(l => {
+    const pending = Math.max(0, round2(l.qty - l.received_qty));
+    return `<tr>
+      <td data-label="Material" class="strong">${escapeHTML(l.name)}</td>
+      <td data-label="Ordered" class="nowrap">${fmtQty(l.qty)} ${escapeHTML(l.unit)}</td>
+      <td data-label="Already received" class="nowrap muted">${fmtQty(l.received_qty)} ${escapeHTML(l.unit)}</td>
+      <td data-label="Pending" class="nowrap strong">${fmtQty(pending)} ${escapeHTML(l.unit)}</td>
+      <td data-label="Receiving now"><span style="display:flex;align-items:center;gap:6px;justify-content:flex-end;">
+        <input type="number" class="input grn-input" data-mid="${escapeHTML(l.material_id)}" data-pending="${pending}" min="0" max="${pending}" step="any" value="${pending}" ${pending <= 0 ? "disabled" : ""} aria-label="Quantity received of ${escapeHTML(l.name)}">
+        <span class="muted" style="font-size:12px;">${escapeHTML(l.unit)}</span></span></td>
+    </tr>`;
+  }).join("");
+  closeModal("po-view-modal");
+  openModal("grn-modal");
+}
+
+function fillGRN(all) {
+  document.querySelectorAll("#grn-lines .grn-input:not(:disabled)").forEach(inp => { inp.value = all ? inp.dataset.pending : ""; });
+}
+
+function saveReceipt(e) {
+  e.preventDefault();
+  const id = document.getElementById("grn-po-id").value;
+  const lines = [];
+  let over = null;
+  document.querySelectorAll("#grn-lines .grn-input:not(:disabled)").forEach(inp => {
+    const q = parseFloat(inp.value) || 0;
+    if (q > parseFloat(inp.dataset.pending) + 0.0005) over = inp;
+    if (q > 0) lines.push({ material_id: inp.dataset.mid, qty: q });
+  });
+  if (over) {
+    window.showToast("You can't receive more than is pending on the order.", "error");
+    over.focus();
+    return;
+  }
+  if (!lines.length) {
+    window.showToast("Enter the quantity that arrived.", "error");
+    return;
+  }
+  api("/api/purchase-orders", { method: "POST", body: {
+    action: "receive", id, lines,
+    bill_no: document.getElementById("grn-bill").value.trim(),
+    note: document.getElementById("grn-note").value.trim()
+  } })
+    .then(res => {
+      closeModal("grn-modal");
+      window.showToast(res.po.status === "Received" ? `${res.po.po_number} fully received — stock updated.` : `Part delivery recorded on ${res.po.po_number} — stock updated.`, "success");
+      return loadPurchasing().then(() => openPOView(res.po.id));
+    })
+    .catch(err => window.showToast(err.message, "error"));
+}
+
+/* Printable purchase order (opens print dialog → Save as PDF) */
+function printPO(id) {
+  const po = purchaseOrders.find(p => p.id === id);
+  if (!po) return;
+  const sp = suppliers.find(x => x.id === po.supplier_id) || { name: po.supplier_name };
+  const biz = publicSettings;
+  const rows = po.lines.map((l, i) => `<tr><td>${i + 1}</td><td>${escapeHTML(l.name)}</td><td class="r">${fmtQty(l.qty)} ${escapeHTML(l.unit)}</td><td class="r">${inr(l.rate)}</td><td class="r">${inr(l.qty * l.rate)}</td></tr>`).join("");
+  const w = window.open("", "_blank");
+  if (!w) {
+    window.showToast("Allow pop-ups to print the purchase order.", "warning");
+    return;
+  }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHTML(po.po_number)}</title>
+  <style>
+    body{font-family:Inter,Arial,sans-serif;color:#1f2e2d;margin:32px;font-size:13px}
+    h1{font-size:22px;margin:0 0 4px} .muted{color:#6b7776}
+    .head{display:flex;justify-content:space-between;gap:20px;border-bottom:3px solid #2f5d5c;padding-bottom:14px;margin-bottom:18px}
+    .box{display:flex;gap:40px;margin-bottom:18px} .box h3{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#6b7776;margin:0 0 4px}
+    table{width:100%;border-collapse:collapse} th,td{padding:8px 10px;border-bottom:1px solid #e6e2d9;text-align:left}
+    th{background:#f4f2ed;font-size:11px;text-transform:uppercase;letter-spacing:.4px} .r{text-align:right}
+    .tot{margin-left:auto;width:260px;margin-top:12px} .tot div{display:flex;justify-content:space-between;padding:3px 0}
+    .tot .g{font-weight:800;font-size:15px;border-top:2px solid #1f2e2d;margin-top:4px;padding-top:6px}
+    .sign{margin-top:60px;display:flex;justify-content:space-between} .sign div{border-top:1px solid #999;padding-top:6px;width:200px;text-align:center}
+  </style></head><body>
+  <div class="head">
+    <div><h1>${escapeHTML(biz.business_name || "")}</h1><div class="muted">${escapeHTML(biz.business_address || "")}</div>
+      ${biz.business_phone ? `<div class="muted">Phone: ${escapeHTML(biz.business_phone)}</div>` : ""}${biz.gstin ? `<div class="muted">GSTIN: ${escapeHTML(biz.gstin)}</div>` : ""}</div>
+    <div style="text-align:right"><h1>PURCHASE ORDER</h1><div><b>${escapeHTML(po.po_number)}</b></div>
+      <div class="muted">Date: ${formatDate(po.ordered_at || po.created_at)}</div>${po.expected_date ? `<div class="muted">Deliver by: ${formatDate(po.expected_date)}</div>` : ""}
+      ${po.status === "Draft" ? '<div style="color:#b45309;font-weight:700">DRAFT</div>' : ""}</div>
+  </div>
+  <div class="box"><div><h3>Supplier</h3><b>${escapeHTML(sp.name)}</b>${sp.contact ? `<br>${escapeHTML(sp.contact)}` : ""}${sp.address ? `<br>${escapeHTML(sp.address)}` : ""}
+    ${sp.phone ? `<br>${escapeHTML(sp.phone)}` : ""}${sp.email ? `<br>${escapeHTML(sp.email)}` : ""}${sp.gstin ? `<br>GSTIN: ${escapeHTML(sp.gstin)}` : ""}</div></div>
+  <table><thead><tr><th>#</th><th>Item</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>${rows}</tbody></table>
+  <div class="tot"><div><span>Subtotal</span><span>${inr(po.subtotal)}</span></div><div><span>GST ${po.tax_pct}%</span><span>${inr(po.tax)}</span></div><div class="g"><span>Total</span><span>${inr(po.total)}</span></div></div>
+  ${po.notes ? `<p style="margin-top:20px"><b>Notes:</b> ${escapeHTML(po.notes)}</p>` : ""}
+  <div class="sign"><div>Prepared by (${escapeHTML(po.created_by)})</div><div>Authorised signatory</div></div>
+  <script>window.onload=function(){window.print();}<\/script></body></html>`);
+  w.document.close();
+}
+
+function goLowStockPO() {
+  switchAdminTab("purchasing");
+  loadPurchasing().then(createPOFromLowStock);
 }

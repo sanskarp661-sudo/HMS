@@ -9,7 +9,7 @@
   <link rel="icon" type="image/svg+xml" href="assets/img/mosaic-engine-icon.svg">
   <link rel="apple-touch-icon" href="assets/img/mosaic-engine-icon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="assets/css/admin.css?v=20261117c">
+  <link rel="stylesheet" href="assets/css/admin.css?v=20261117d">
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
@@ -82,6 +82,7 @@
           <button class="nav-link" data-tab="items"><i class="fas fa-utensils"></i> Menu Items</button>
           <button class="nav-link" data-tab="categories"><i class="fas fa-tags"></i> Categories</button>
           <button class="nav-link" data-tab="inventory"><i class="fas fa-boxes-stacked"></i> BOM &amp; Inventory</button>
+          <button class="nav-link" data-tab="purchasing"><i class="fas fa-truck-ramp-box"></i> Purchasing <span class="nav-badge hidden" id="nav-po-badge">0</span></button>
         </div>
         <div class="nav-group" data-group="admin">
           <div class="nav-label">Administration</div>
@@ -400,6 +401,66 @@
           </div>
         </section>
 
+        <!-- ─────────── PURCHASING ─────────── -->
+        <section class="page" id="sec-purchasing">
+          <div class="page-header">
+            <div>
+              <h2>Purchasing</h2>
+              <p>Raise purchase orders to suppliers and receive goods into stock.</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-secondary" onclick="loadPurchasing()"><i class="fas fa-rotate"></i> Refresh</button>
+              <button class="btn btn-secondary po-edit-only" onclick="createPOFromLowStock()"><i class="fas fa-wand-magic-sparkles"></i> PO for low stock</button>
+              <button class="btn btn-primary po-edit-only" onclick="openPOForm()"><i class="fas fa-plus"></i> New PO</button>
+            </div>
+          </div>
+
+          <div class="stats-grid" id="po-stats"></div>
+
+          <div class="tabs" role="tablist">
+            <button class="tab active" data-ptab="orders" onclick="switchPurchasingTab('orders')"><i class="fas fa-file-invoice"></i> Purchase orders</button>
+            <button class="tab" data-ptab="suppliers" onclick="switchPurchasingTab('suppliers')"><i class="fas fa-truck-field"></i> Suppliers</button>
+          </div>
+
+          <div class="subpage active" id="pur-orders">
+            <div class="card">
+              <div class="card-header">
+                <div class="seg" id="po-filter">
+                  <button type="button" class="active" data-f="open">Open</button>
+                  <button type="button" data-f="Draft">Drafts</button>
+                  <button type="button" data-f="closed">Completed</button>
+                  <button type="button" data-f="all">All</button>
+                </div>
+                <div class="input-group" style="min-width:220px;">
+                  <i class="fas fa-magnifying-glass"></i>
+                  <input type="search" class="input" id="po-search" placeholder="PO number or supplier…" oninput="renderPOs()">
+                </div>
+              </div>
+              <div class="table-wrap cards">
+                <table class="table responsive">
+                  <thead><tr><th>PO</th><th>Supplier</th><th>Created</th><th>Expected</th><th>Items</th><th>Total</th><th>Status</th><th class="text-right">Actions</th></tr></thead>
+                  <tbody id="po-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="subpage" id="pur-suppliers">
+            <div class="card">
+              <div class="card-header">
+                <h3><i class="fas fa-truck-field"></i> Suppliers</h3>
+                <button class="btn btn-primary btn-sm po-edit-only" onclick="openSupplierForm()"><i class="fas fa-plus"></i> Add supplier</button>
+              </div>
+              <div class="table-wrap cards">
+                <table class="table responsive">
+                  <thead><tr><th>Supplier</th><th>Contact</th><th>Phone</th><th>GSTIN</th><th>Open POs</th><th class="text-right">Actions</th></tr></thead>
+                  <tbody id="supplier-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- ─────────── USERS ─────────── -->
         <section class="page" id="sec-users">
           <div class="page-header">
@@ -426,8 +487,8 @@
                 <thead><tr><th>Role</th><th>Can access</th></tr></thead>
                 <tbody>
                   <tr><td data-label="Role" class="strong">Admin</td><td data-label="Access">Everything, including Users, Audit Log and Settings</td></tr>
-                  <tr><td data-label="Role" class="strong">Owner</td><td data-label="Access">Everything except Users and Settings</td></tr>
-                  <tr><td data-label="Role" class="strong">Receptionist</td><td data-label="Access">Table orders, billing &amp; payments, invoices, menu items, stock-in</td></tr>
+                  <tr><td data-label="Role" class="strong">Owner</td><td data-label="Access">Everything except Users and Settings (incl. creating and placing purchase orders)</td></tr>
+                  <tr><td data-label="Role" class="strong">Receptionist</td><td data-label="Access">Table orders, billing &amp; payments, invoices, menu items, stock-in, receiving purchase orders</td></tr>
                   <tr><td data-label="Role" class="strong">Waiter</td><td data-label="Access">Table orders (no billing), menu view</td></tr>
                   <tr><td data-label="Role" class="strong">Kitchen</td><td data-label="Access">Kitchen Display only</td></tr>
                 </tbody>
@@ -778,6 +839,125 @@
     </div>
   </div>
 
+  <!-- Supplier form -->
+  <div class="modal-backdrop" id="supplier-modal" onclick="if(event.target===this) closeModal('supplier-modal')">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="supplier-modal-title">
+      <div class="modal-header">
+        <h3 id="supplier-modal-title">Add supplier</h3>
+        <button class="btn btn-icon btn-ghost" type="button" onclick="closeModal('supplier-modal')" aria-label="Close"><i class="fas fa-xmark"></i></button>
+      </div>
+      <form onsubmit="saveSupplier(event)" style="display:contents;">
+        <div class="modal-body">
+          <input type="hidden" id="sup-id">
+          <div class="form-grid">
+            <div class="field" style="grid-column:1/-1;"><label for="sup-name">Supplier name *</label><input type="text" class="input" id="sup-name" required maxlength="80" placeholder="e.g. Fresh Farms Pvt Ltd"></div>
+            <div class="field"><label for="sup-contact">Contact person</label><input type="text" class="input" id="sup-contact" maxlength="60"></div>
+            <div class="field"><label for="sup-phone">Phone</label><input type="tel" class="input" id="sup-phone" maxlength="20"></div>
+            <div class="field"><label for="sup-email">Email</label><input type="email" class="input" id="sup-email" maxlength="80"></div>
+            <div class="field"><label for="sup-gstin">GSTIN</label><input type="text" class="input" id="sup-gstin" maxlength="20" style="text-transform:uppercase;"></div>
+            <div class="field" style="grid-column:1/-1;"><label for="sup-address">Address</label><input type="text" class="input" id="sup-address" maxlength="200"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('supplier-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Purchase order editor (Draft) -->
+  <div class="modal-backdrop" id="po-modal" onclick="if(event.target===this) closeModal('po-modal')">
+    <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="po-modal-title">
+      <div class="modal-header">
+        <h3 id="po-modal-title">New purchase order</h3>
+        <button class="btn btn-icon btn-ghost" type="button" onclick="closeModal('po-modal')" aria-label="Close"><i class="fas fa-xmark"></i></button>
+      </div>
+      <form onsubmit="savePO(event)" style="display:contents;">
+        <div class="modal-body">
+          <input type="hidden" id="po-id">
+          <div class="form-grid">
+            <div class="field" style="grid-column:span 2;">
+              <label for="po-supplier">Supplier *</label>
+              <select class="select" id="po-supplier" required></select>
+            </div>
+            <div class="field">
+              <label for="po-expected">Expected delivery</label>
+              <input type="date" class="input" id="po-expected">
+            </div>
+            <div class="field">
+              <label for="po-tax">GST %</label>
+              <select class="select" id="po-tax" onchange="updatePOTotals()">
+                <option value="0">0% (none / inclusive)</option><option value="5">5%</option><option value="12">12%</option><option value="18">18%</option><option value="28">28%</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-section">
+            <div class="form-section-title">
+              <span>Materials</span>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="addPOLine()"><i class="fas fa-plus"></i> Add line</button>
+            </div>
+            <div class="po-lines-head"><span>Material</span><span>Qty</span><span>Rate (₹)</span><span class="text-right">Amount</span><span></span></div>
+            <div id="po-lines"></div>
+          </div>
+          <div class="field form-section">
+            <label for="po-notes">Notes for supplier</label>
+            <textarea class="textarea" id="po-notes" maxlength="300" placeholder="e.g. Deliver before 11 am, back gate" style="min-height:64px;"></textarea>
+          </div>
+          <div class="po-totals" id="po-totals"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('po-modal')">Cancel</button>
+          <button type="submit" class="btn btn-secondary" data-place="0"><i class="fas fa-floppy-disk"></i> Save draft</button>
+          <button type="submit" class="btn btn-primary" data-place="1"><i class="fas fa-paper-plane"></i> Save &amp; place order</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Purchase order details -->
+  <div class="modal-backdrop" id="po-view-modal" onclick="if(event.target===this) closeModal('po-view-modal')">
+    <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="po-view-title">
+      <div class="modal-header">
+        <h3 id="po-view-title">Purchase order</h3>
+        <button class="btn btn-icon btn-ghost" type="button" onclick="closeModal('po-view-modal')" aria-label="Close"><i class="fas fa-xmark"></i></button>
+      </div>
+      <div class="modal-body" id="po-view-body"></div>
+      <div class="modal-footer" id="po-view-actions"></div>
+    </div>
+  </div>
+
+  <!-- Goods receipt -->
+  <div class="modal-backdrop" id="grn-modal" onclick="if(event.target===this) closeModal('grn-modal')">
+    <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="grn-title">
+      <div class="modal-header">
+        <h3 id="grn-title">Receive goods</h3>
+        <button class="btn btn-icon btn-ghost" type="button" onclick="closeModal('grn-modal')" aria-label="Close"><i class="fas fa-xmark"></i></button>
+      </div>
+      <form onsubmit="saveReceipt(event)" style="display:contents;">
+        <div class="modal-body">
+          <input type="hidden" id="grn-po-id">
+          <p class="muted" style="margin-bottom:12px;font-size:13px;">Enter what actually arrived. Anything not delivered stays pending on the order. Stock is added immediately and each material's cost is updated to this order's rate.</p>
+          <div class="table-wrap cards">
+            <table class="table responsive">
+              <thead><tr><th>Material</th><th>Ordered</th><th>Already received</th><th>Pending</th><th style="width:150px;">Receiving now</th></tr></thead>
+              <tbody id="grn-lines"></tbody>
+            </table>
+          </div>
+          <div class="form-grid" style="margin-top:16px;">
+            <div class="field"><label for="grn-bill">Supplier bill / challan no.</label><input type="text" class="input" id="grn-bill" maxlength="40"></div>
+            <div class="field"><label for="grn-note">Note</label><input type="text" class="input" id="grn-note" maxlength="120" placeholder="e.g. 2 kg short, rest tomorrow"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="fillGRN(0)">Clear</button>
+          <button type="button" class="btn btn-secondary" onclick="fillGRN(1)">Receive all pending</button>
+          <button type="submit" class="btn btn-success"><i class="fas fa-check"></i> Add to stock</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Bill: receipt + payment entry -->
   <div class="modal-backdrop" id="bill-modal" onclick="if(event.target===this) closeBillModal()">
     <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="bill-modal-title">
@@ -824,8 +1004,8 @@
     </div>
   </div>
 
-  <script src="assets/js/seed.js?v=20261117c"></script>
-  <script src="assets/js/admin.js?v=20261117c"></script>
-  <script src="assets/js/dashboard.js?v=20261117c"></script>
+  <script src="assets/js/seed.js?v=20261117d"></script>
+  <script src="assets/js/admin.js?v=20261117d"></script>
+  <script src="assets/js/dashboard.js?v=20261117d"></script>
 </body>
 </html>

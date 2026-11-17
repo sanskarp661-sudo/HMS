@@ -1215,6 +1215,17 @@ switch ($route) {
                         }
                     }
                 }
+                foreach (read_json("purchase_orders.json", []) as $po) {
+                    if (in_array($po['status'], ['Draft', 'Ordered', 'Partially Received'], true)) {
+                        foreach ($po['lines'] as $l) {
+                            if ($l['material_id'] === $id) {
+                                http_response_code(400);
+                                echo json_encode(["status" => "error", "message" => "This material is on open purchase order " . $po['po_number'] . "."]);
+                                exit;
+                            }
+                        }
+                    }
+                }
                 $name = $id;
                 $inv['materials'] = array_values(array_filter($inv['materials'], function($row) use ($id, &$name) {
                     if ($row['id'] === $id) { $name = $row['name']; return false; }
@@ -1313,6 +1324,260 @@ switch ($route) {
             write_json("bom.json", (object)$bom);
             write_audit_log($staff_user, "Updated recipe (BOM) for \"" . $menu_item['name'] . "\" — $variant (" . count($ings) . " ingredients)");
             echo json_encode(["status" => "ok"]);
+        }
+        break;
+
+    // 27. GET/POST /api/suppliers — vendor master for purchasing
+    case 'suppliers':
+        require_bom_enabled();
+        if ($method === 'GET') {
+            require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+            echo json_encode(read_json("suppliers.json", []));
+        } elseif ($method === 'POST') {
+            require_role($staff_user, ['Admin', 'Owner']);
+            $input = json_decode(file_get_contents("php://input"), true);
+            $action = isset($input['action']) ? $input['action'] : '';
+            $suppliers = read_json("suppliers.json", []);
+            if ($action === 'save') {
+                $sup = isset($input['supplier']) && is_array($input['supplier']) ? $input['supplier'] : [];
+                $name = clean_text(isset($sup['name']) ? $sup['name'] : '', 80);
+                if ($name === '') {
+                    http_response_code(400);
+                    echo json_encode(["status" => "error", "message" => "Supplier name is required."]);
+                    exit;
+                }
+                $fields = [
+                    "name"    => $name,
+                    "contact" => clean_text(isset($sup['contact']) ? $sup['contact'] : '', 60),
+                    "phone"   => clean_text(isset($sup['phone']) ? $sup['phone'] : '', 20),
+                    "email"   => filter_var(isset($sup['email']) ? trim($sup['email']) : '', FILTER_VALIDATE_EMAIL) ?: '',
+                    "gstin"   => strtoupper(clean_text(isset($sup['gstin']) ? $sup['gstin'] : '', 20)),
+                    "address" => clean_text(isset($sup['address']) ? $sup['address'] : '', 200),
+                ];
+                $id = isset($sup['id']) ? (string)$sup['id'] : '';
+                $found = false;
+                foreach ($suppliers as &$row) {
+                    if ($id !== '' && $row['id'] === $id) { $row = array_merge($row, $fields); $found = true; break; }
+                }
+                unset($row);
+                if (!$found) {
+                    $id = "sup-" . time() . "-" . bin2hex(random_bytes(3));
+                    $suppliers[] = array_merge(["id" => $id], $fields);
+                }
+                write_json("suppliers.json", $suppliers);
+                write_audit_log($staff_user, ($found ? "Updated" : "Added") . " supplier: \"$name\"");
+                echo json_encode(["status" => "ok", "id" => $id]);
+            } elseif ($action === 'delete') {
+                $id = isset($input['id']) ? (string)$input['id'] : '';
+                foreach (read_json("purchase_orders.json", []) as $po) {
+                    if ($po['supplier_id'] === $id && in_array($po['status'], ['Draft', 'Ordered', 'Partially Received'], true)) {
+                        http_response_code(400);
+                        echo json_encode(["status" => "error", "message" => "This supplier has open purchase orders (" . $po['po_number'] . "). Close or cancel them first."]);
+                        exit;
+                    }
+                }
+                $name = $id;
+                $suppliers = array_values(array_filter($suppliers, function($r) use ($id, &$name) {
+                    if ($r['id'] === $id) { $name = $r['name']; return false; }
+                    return true;
+                }));
+                write_json("suppliers.json", $suppliers);
+                write_audit_log($staff_user, "Deleted supplier: \"$name\"");
+                echo json_encode(["status" => "ok"]);
+            } else {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "Unknown supplier action."]);
+            }
+        }
+        break;
+
+    // 28. GET/POST /api/purchase-orders — Draft → Ordered → (Partially) Received, or Cancelled
+    case 'purchase-orders':
+        require_bom_enabled();
+        if ($method === 'GET') {
+            require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+            $pos = read_json("purchase_orders.json", []);
+            usort($pos, function($a, $b) { return strcmp($b['created_at'], $a['created_at']); });
+            echo json_encode($pos);
+            break;
+        }
+        if ($method !== 'POST') break;
+
+        $input = json_decode(file_get_contents("php://input"), true);
+        $action = isset($input['action']) ? $input['action'] : '';
+        // Receptionists can record deliveries; everything else is Admin / Owner
+        require_role($staff_user, $action === 'receive' ? ['Admin', 'Owner', 'Receptionist'] : ['Admin', 'Owner']);
+
+        $pos = read_json("purchase_orders.json", []);
+        $now = gmdate("Y-m-d\TH:i:s\Z");
+        $find = function($id) use (&$pos) {
+            foreach ($pos as $i => $po) if ($po['id'] === $id) return $i;
+            return -1;
+        };
+        $fail = function($msg, $code = 400) {
+            http_response_code($code);
+            echo json_encode(["status" => "error", "message" => $msg]);
+            exit;
+        };
+
+        if ($action === 'save') {
+            // Create or edit a Draft
+            $data = isset($input['po']) && is_array($input['po']) ? $input['po'] : [];
+            $supplier_id = isset($data['supplier_id']) ? (string)$data['supplier_id'] : '';
+            $supplier = null;
+            foreach (read_json("suppliers.json", []) as $sup) if ($sup['id'] === $supplier_id) $supplier = $sup;
+            if ($supplier === null) $fail("Choose a supplier.");
+
+            $materials = [];
+            foreach (read_json("inventory.json", ["materials" => []])['materials'] as $m) $materials[$m['id']] = $m;
+            $lines = [];
+            $seen = [];
+            foreach ((isset($data['lines']) && is_array($data['lines']) ? $data['lines'] : []) as $ln) {
+                $mid = isset($ln['material_id']) ? (string)$ln['material_id'] : '';
+                $qty = round(floatval(isset($ln['qty']) ? $ln['qty'] : 0), 3);
+                $rate = money(isset($ln['rate']) ? $ln['rate'] : 0);
+                if (!isset($materials[$mid]) || $qty <= 0 || $rate < 0) continue;
+                if (isset($seen[$mid])) $fail("\"" . $materials[$mid]['name'] . "\" is listed twice. Combine it into one line.");
+                $seen[$mid] = true;
+                $lines[] = ["material_id" => $mid, "name" => $materials[$mid]['name'], "unit" => $materials[$mid]['unit'],
+                            "qty" => $qty, "rate" => $rate, "received_qty" => 0];
+            }
+            if (count($lines) === 0) $fail("Add at least one material with a quantity.");
+            $tax_pct = max(0, min(28, floatval(isset($data['tax_pct']) ? $data['tax_pct'] : 0)));
+            $subtotal = money(array_sum(array_map(function($l) { return $l['qty'] * $l['rate']; }, $lines)));
+            $tax = money($subtotal * $tax_pct / 100);
+            $expected = isset($data['expected_date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $data['expected_date']) ? $data['expected_date'] : '';
+            $notes = clean_text(isset($data['notes']) ? $data['notes'] : '', 300);
+
+            $id = isset($data['id']) ? (string)$data['id'] : '';
+            $idx = $id !== '' ? $find($id) : -1;
+            if ($idx >= 0) {
+                if ($pos[$idx]['status'] !== 'Draft') $fail("Only Draft purchase orders can be edited.");
+                $pos[$idx] = array_merge($pos[$idx], [
+                    "supplier_id" => $supplier_id, "supplier_name" => $supplier['name'], "lines" => $lines,
+                    "tax_pct" => $tax_pct, "subtotal" => $subtotal, "tax" => $tax, "total" => money($subtotal + $tax),
+                    "expected_date" => $expected, "notes" => $notes,
+                ]);
+                $pos[$idx]['history'][] = ["timestamp" => $now, "user" => $staff_user, "action" => "Edited draft"];
+                $po = $pos[$idx];
+                write_audit_log($staff_user, "Edited purchase order " . $po['po_number']);
+            } else {
+                // Sequential PO number per month, e.g. PO-202611-0003
+                $prefix = "PO-" . gmdate("Ym") . "-";
+                $n = 0;
+                foreach ($pos as $p) if (strpos($p['po_number'], $prefix) === 0) $n = max($n, intval(substr($p['po_number'], strlen($prefix))));
+                $po = [
+                    "id" => "po-" . time() . "-" . bin2hex(random_bytes(3)),
+                    "po_number" => $prefix . str_pad($n + 1, 4, "0", STR_PAD_LEFT),
+                    "status" => "Draft",
+                    "supplier_id" => $supplier_id, "supplier_name" => $supplier['name'],
+                    "lines" => $lines, "tax_pct" => $tax_pct, "subtotal" => $subtotal, "tax" => $tax, "total" => money($subtotal + $tax),
+                    "expected_date" => $expected, "notes" => $notes,
+                    "created_by" => $staff_user, "created_at" => $now,
+                    "receipts" => [],
+                    "history" => [["timestamp" => $now, "user" => $staff_user, "action" => "Created draft"]],
+                ];
+                $pos[] = $po;
+                write_audit_log($staff_user, "Created purchase order " . $po['po_number'] . " for " . $supplier['name'] . " (₹" . $po['total'] . ")");
+            }
+            write_json("purchase_orders.json", $pos);
+            echo json_encode(["status" => "ok", "po" => $po]);
+
+        } elseif ($action === 'place') {
+            $idx = $find(isset($input['id']) ? (string)$input['id'] : '');
+            if ($idx < 0) $fail("Purchase order not found.", 404);
+            if ($pos[$idx]['status'] !== 'Draft') $fail("This purchase order has already been placed.");
+            $pos[$idx]['status'] = 'Ordered';
+            $pos[$idx]['ordered_at'] = $now;
+            $pos[$idx]['history'][] = ["timestamp" => $now, "user" => $staff_user, "action" => "Placed order with supplier"];
+            write_json("purchase_orders.json", $pos);
+            write_audit_log($staff_user, "Placed purchase order " . $pos[$idx]['po_number'] . " with " . $pos[$idx]['supplier_name']);
+            echo json_encode(["status" => "ok", "po" => $pos[$idx]]);
+
+        } elseif ($action === 'receive') {
+            // Goods receipt: adds stock, writes the ledger, updates last purchase cost
+            $idx = $find(isset($input['id']) ? (string)$input['id'] : '');
+            if ($idx < 0) $fail("Purchase order not found.", 404);
+            $po = $pos[$idx];
+            if (!in_array($po['status'], ['Ordered', 'Partially Received'], true)) $fail("Only placed orders can be received.");
+            $bill_no = clean_text(isset($input['bill_no']) ? $input['bill_no'] : '', 40);
+            $note = clean_text(isset($input['note']) ? $input['note'] : '', 120);
+            $incoming = [];
+            foreach ((isset($input['lines']) && is_array($input['lines']) ? $input['lines'] : []) as $ln) {
+                $mid = isset($ln['material_id']) ? (string)$ln['material_id'] : '';
+                $q = round(floatval(isset($ln['qty']) ? $ln['qty'] : 0), 3);
+                if ($mid !== '' && $q > 0) $incoming[$mid] = (isset($incoming[$mid]) ? $incoming[$mid] : 0) + $q;
+            }
+            if (count($incoming) === 0) $fail("Enter the quantity received for at least one material.");
+
+            $received_lines = [];
+            foreach ($po['lines'] as &$line) {
+                if (!isset($incoming[$line['material_id']])) continue;
+                $q = $incoming[$line['material_id']];
+                $pending = round($line['qty'] - $line['received_qty'], 3);
+                if ($q > $pending + 0.0005) $fail("\"" . $line['name'] . "\": only " . $pending . " " . $line['unit'] . " is still pending on this order.");
+                $line['received_qty'] = round($line['received_qty'] + $q, 3);
+                $received_lines[] = ["material_id" => $line['material_id'], "name" => $line['name'], "unit" => $line['unit'], "qty" => $q, "rate" => $line['rate']];
+            }
+            unset($line);
+            if (count($received_lines) === 0) $fail("Those materials are not on this purchase order.");
+
+            // Update inventory
+            $inv = read_json("inventory.json", ["materials" => []]);
+            $entries = [];
+            foreach ($received_lines as $rl) {
+                foreach ($inv['materials'] as &$m) {
+                    if ($m['id'] !== $rl['material_id']) continue;
+                    $m['stock'] = round(floatval($m['stock']) + $rl['qty'], 3);
+                    if ($rl['rate'] > 0) $m['cost_per_unit'] = $rl['rate'];   // latest purchase price
+                    $entries[] = ["timestamp" => $now, "material_id" => $m['id'], "name" => $m['name'], "delta" => $rl['qty'],
+                                  "balance" => $m['stock'], "reason" => "Received on " . $po['po_number'] . ($bill_no !== '' ? " (bill $bill_no)" : ""),
+                                  "user" => $staff_user];
+                }
+                unset($m);
+            }
+            write_json("inventory.json", $inv);
+            add_ledger_entries($entries);
+
+            $all_done = true;
+            foreach ($po['lines'] as $l) if ($l['received_qty'] + 0.0005 < $l['qty']) $all_done = false;
+            $po['status'] = $all_done ? 'Received' : 'Partially Received';
+            $po['receipts'][] = ["timestamp" => $now, "user" => $staff_user, "bill_no" => $bill_no, "note" => $note, "lines" => $received_lines,
+                                 "value" => money(array_sum(array_map(function($l) { return $l['qty'] * $l['rate']; }, $received_lines)))];
+            $po['history'][] = ["timestamp" => $now, "user" => $staff_user, "action" => ($all_done ? "Received in full" : "Received part delivery") . ($bill_no !== '' ? " · bill $bill_no" : "")];
+            if ($all_done) $po['received_at'] = $now;
+            $pos[$idx] = $po;
+            write_json("purchase_orders.json", $pos);
+            $summary = implode(", ", array_map(function($l) { return $l['name'] . " " . $l['qty'] . " " . $l['unit']; }, $received_lines));
+            write_audit_log($staff_user, "Received goods on " . $po['po_number'] . ": $summary");
+            echo json_encode(["status" => "ok", "po" => $po]);
+
+        } elseif ($action === 'cancel') {
+            $idx = $find(isset($input['id']) ? (string)$input['id'] : '');
+            if ($idx < 0) $fail("Purchase order not found.", 404);
+            $st = $pos[$idx]['status'];
+            if ($st === 'Received' || $st === 'Cancelled') $fail("This purchase order is already closed.");
+            $reason = clean_text(isset($input['reason']) ? $input['reason'] : '', 120);
+            // A part-received order is closed short: received stock stays, the rest is cancelled
+            $pos[$idx]['status'] = $st === 'Partially Received' ? 'Closed' : 'Cancelled';
+            $pos[$idx]['history'][] = ["timestamp" => $now, "user" => $staff_user,
+                "action" => ($st === 'Partially Received' ? "Closed short (rest cancelled)" : "Cancelled") . ($reason !== '' ? " — $reason" : "")];
+            write_json("purchase_orders.json", $pos);
+            write_audit_log($staff_user, ($st === 'Partially Received' ? "Closed " : "Cancelled ") . "purchase order " . $pos[$idx]['po_number'] . ($reason !== '' ? " ($reason)" : ""));
+            echo json_encode(["status" => "ok", "po" => $pos[$idx]]);
+
+        } elseif ($action === 'delete') {
+            $idx = $find(isset($input['id']) ? (string)$input['id'] : '');
+            if ($idx < 0) $fail("Purchase order not found.", 404);
+            if ($pos[$idx]['status'] !== 'Draft') $fail("Only drafts can be deleted. Cancel the order instead.");
+            $num = $pos[$idx]['po_number'];
+            array_splice($pos, $idx, 1);
+            write_json("purchase_orders.json", $pos);
+            write_audit_log($staff_user, "Deleted draft purchase order $num");
+            echo json_encode(["status" => "ok"]);
+
+        } else {
+            $fail("Unknown purchase order action.");
         }
         break;
 
