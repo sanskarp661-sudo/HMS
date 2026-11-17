@@ -1,0 +1,615 @@
+[
+    {
+        "invoice_id": "INV-1783860113473",
+        "table_no": "5",
+        "timestamp": "2026-07-12T12:41:53Z",
+        "subtotal": 1320,
+        "service_charge": 132,
+        "tax": 66,
+        "total": 1518,
+        "items": [
+            {
+                "name": "South German Wheat Beer",
+                "variant": "500ML Mug",
+                "price": 350,
+                "quantity": 2
+            },
+            {
+                "name": "Crispy Corn Kernels",
+                "variant": "Portion",
+                "price": 280,
+                "quantity": 1
+            },
+            {
+                "name": "Dal Makhani",
+                "variant": "Portion",
+                "price": 340,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-1783860373850",
+        "table_no": "7",
+        "timestamp": "2026-07-12T12:46:13Z",
+        "subtotal": 440,
+        "service_charge": 44,
+        "tax": 22,
+        "total": 506,
+        "items": [
+            {
+                "name": "Hot Fudge Brownie",
+                "variant": "Portion",
+                "price": 220,
+                "quantity": 2
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-1783860607854",
+        "table_no": "5",
+        "timestamp": "2026-07-12T12:50:07Z",
+        "subtotal": 1045,
+        "service_charge": 104.5,
+        "tax": 52.25,
+        "total": 1201.75,
+        "items": [
+            {
+                "id": "item-brownie",
+                "name": "Hot Fudge Brownie",
+                "variant": "Portion",
+                "price": 275,
+                "quantity": 1
+            },
+            {
+                "id": "item-dal-makhani",
+                "name": "Dal Makhani",
+                "variant": "Portion",
+                "price": 395,
+                "quantity": 1
+            },
+            {
+                "id": "item-spring-rolls",
+                "name": "Downtown Spring Rolls",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-1783860818687",
+        "table_no": "9",
+        "timestamp": "2026-07-12T12:53:38Z",
+        "subtotal": 350,
+        "service_charge": 35,
+        "tax": 17.5,
+        "total": 402.5,
+        "items": [
+            {
+                "name": "South German Wheat Beer",
+                "variant": "500ML Mug",
+                "price": 350,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-1783861037546",
+        "table_no": "9",
+        "customer_name": "Aman",
+        "customer_phone": "9999988888",
+        "timestamp": "2026-07-12T12:57:17Z",
+        "subtotal": 350,
+        "service_charge": 35,
+        "tax": 17.5,
+        "total": 402.5,
+        "items": [
+            {
+                "name": "South German Wheat Beer",
+                "variant": "500ML Mug",
+                "price": 350,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-1783861075425",
+        "table_no": "5",
+        "customer_name": "Guest",
+        "customer_phone": "",
+        "timestamp": "2026-07-12T12:57:55Z",
+        "subtotal": 375,
+        "service_charge": 37.5,
+        "tax": 18.75,
+        "total": 431.25,
+        "items": [
+            {
+                "id": "item-crispy-corn",
+                "name": "Crispy Corn Kernels",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-1783861227567",
+        "table_no": "5",
+        "customer_name": "Sanskar Patni",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-07-12T13:00:27Z",
+        "subtotal": 2900,
+        "service_charge": 290,
+        "tax": 145,
+        "total": 3335,
+        "items": [
+            {
+                "id": "item-beer-german",
+                "name": "South German Wheat Beer",
+                "variant": "Mug (500ml)",
+                "price": 425,
+                "quantity": 1
+            },
+            {
+                "id": "item-beer-german",
+                "name": "South German Wheat Beer",
+                "variant": "Dispenser (3L)",
+                "price": 2475,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-1783861693091",
+        "table_no": "11",
+        "customer_name": "Raj",
+        "customer_phone": "9988776655",
+        "timestamp": "2026-07-12T13:08:13Z",
+        "subtotal": 220,
+        "service_charge": 22,
+        "tax": 11,
+        "total": 253,
+        "items": [
+            {
+                "name": "Hot Fudge Brownie",
+                "variant": "Portion",
+                "price": 220,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-1783861819021",
+        "table_no": "6",
+        "customer_name": "Kumari Khushi",
+        "customer_phone": "6264669438",
+        "timestamp": "2026-07-12T13:10:19Z",
+        "subtotal": 2475,
+        "service_charge": 247.5,
+        "tax": 123.75,
+        "total": 2846.25,
+        "items": [
+            {
+                "id": "item-beer-wit",
+                "name": "Belgian Wit",
+                "variant": "Dispenser (3L)",
+                "price": 2475,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-1783861998284",
+        "table_no": "7",
+        "customer_name": "Sanskar Patni",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-07-12T13:13:18Z",
+        "subtotal": 425,
+        "service_charge": 42.5,
+        "tax": 21.25,
+        "total": 488.75,
+        "items": [
+            {
+                "id": "item-beer-ipa",
+                "name": "West Coast IPA",
+                "variant": "Mug (500ml)",
+                "price": 425,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-1783865381437",
+        "table_no": "8",
+        "customer_name": "Kumari Khushi",
+        "customer_phone": "6264669438",
+        "timestamp": "2026-07-12T14:09:41Z",
+        "subtotal": 275,
+        "service_charge": 27.5,
+        "tax": 13.75,
+        "total": 316.25,
+        "items": [
+            {
+                "id": "item-mock-colada",
+                "name": "Pineapple Colada",
+                "variant": "Glass",
+                "price": 275,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-1783882885441",
+        "table_no": "8",
+        "customer_name": "Kumari Khushi",
+        "customer_phone": "6264669438",
+        "timestamp": "2026-07-12T19:01:25Z",
+        "subtotal": 4625,
+        "service_charge": 462.5,
+        "tax": 231.25,
+        "total": 5318.75,
+        "items": [
+            {
+                "id": "item-crispy-corn",
+                "name": "Crispy Corn Kernels",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            },
+            {
+                "id": "item-spring-rolls",
+                "name": "Downtown Spring Rolls",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            },
+            {
+                "id": "item-spring-rolls",
+                "name": "Downtown Spring Rolls",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            },
+            {
+                "id": "item-onion-rings",
+                "name": "Crispy Onion Rings",
+                "variant": "Portion",
+                "price": 275,
+                "quantity": 1
+            },
+            {
+                "id": "item-kathi-roll-veg",
+                "name": "Paneer Kathi Roll",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 2
+            },
+            {
+                "id": "item-kathi-roll-chk",
+                "name": "Chicken Kathi Roll",
+                "variant": "Portion",
+                "price": 425,
+                "quantity": 1
+            },
+            {
+                "id": "item-kathi-roll-veg",
+                "name": "Paneer Kathi Roll",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            },
+            {
+                "id": "item-caesar-salad-chk",
+                "name": "Luka Caesar Salad (Chicken)",
+                "variant": "Portion",
+                "price": 475,
+                "quantity": 1
+            },
+            {
+                "id": "item-sushi-cali",
+                "name": "Veg California Roll (8pcs)",
+                "variant": "8 Pcs",
+                "price": 525,
+                "quantity": 1
+            },
+            {
+                "id": "item-sushi-salmon",
+                "name": "Salmon Tempura Roll (8pcs)",
+                "variant": "8 Pcs",
+                "price": 675,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178388887141",
+        "table_no": "5",
+        "customer_name": "Sanskar Patni",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-07-12T20:41:11Z",
+        "subtotal": 1500,
+        "service_charge": 150,
+        "tax": 75,
+        "total": 1725,
+        "items": [
+            {
+                "name": "Crispy Corn Kernels",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 4
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178388914176",
+        "table_no": "5",
+        "customer_name": "Sanskar Patni",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-07-12T20:45:41Z",
+        "subtotal": 750,
+        "service_charge": 75,
+        "tax": 37.5,
+        "total": 862.5,
+        "items": [
+            {
+                "name": "Downtown Spring Rolls",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 2
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178388936133",
+        "table_no": "5",
+        "customer_name": "Khushi",
+        "customer_phone": "6541237485",
+        "timestamp": "2026-07-12T20:49:21Z",
+        "subtotal": 1150,
+        "service_charge": 115,
+        "tax": 57.5,
+        "total": 1322.5,
+        "items": [
+            {
+                "name": "Dragon Fire",
+                "variant": "Glass",
+                "price": 575,
+                "quantity": 1
+            },
+            {
+                "name": "Kiss of Rose",
+                "variant": "Glass",
+                "price": 575,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178392791920",
+        "table_no": "1",
+        "customer_name": "sanskar",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-07-13T07:31:59Z",
+        "subtotal": 375,
+        "service_charge": 37.5,
+        "tax": 18.75,
+        "total": 431.25,
+        "items": [
+            {
+                "name": "Crispy Corn Kernels",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178392819510",
+        "table_no": "3",
+        "customer_name": "sanskar",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-07-13T07:36:35Z",
+        "subtotal": 2475,
+        "service_charge": 247.5,
+        "tax": 123.75,
+        "total": 2846.25,
+        "items": [
+            {
+                "name": "South German Wheat Beer",
+                "variant": "Dispenser (3L)",
+                "price": 2475,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178392820233",
+        "table_no": "2",
+        "customer_name": "sanskar",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-07-13T07:36:42Z",
+        "subtotal": 375,
+        "service_charge": 37.5,
+        "tax": 18.75,
+        "total": 431.25,
+        "items": [
+            {
+                "name": "Downtown Spring Rolls",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178392820712",
+        "table_no": "7",
+        "customer_name": "sanskar",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-07-13T07:36:47Z",
+        "subtotal": 2475,
+        "service_charge": 247.5,
+        "tax": 123.75,
+        "total": 2846.25,
+        "items": [
+            {
+                "name": "Belgian Wit",
+                "variant": "Dispenser (3L)",
+                "price": 2475,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178393018693",
+        "table_no": "2",
+        "customer_name": "sanskar",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-07-13T08:09:46Z",
+        "subtotal": 375,
+        "service_charge": 37.5,
+        "tax": 18.75,
+        "total": 431.25,
+        "items": [
+            {
+                "name": "Downtown Spring Rolls",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178471056792",
+        "table_no": "5",
+        "customer_name": "sanskar",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-07-22T08:56:07Z",
+        "subtotal": 275,
+        "service_charge": 27.5,
+        "tax": 13.75,
+        "total": 316.25,
+        "items": [
+            {
+                "name": "Hot Fudge Brownie",
+                "variant": "Portion",
+                "price": 275,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178637745142",
+        "table_no": "5",
+        "customer_name": "Sanskar",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-08-10T15:57:31Z",
+        "subtotal": 750,
+        "service_charge": 75,
+        "tax": 37.5,
+        "total": 862.5,
+        "items": [
+            {
+                "name": "Downtown Spring Rolls",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 2
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178638017097",
+        "table_no": "5",
+        "customer_name": "Sanskar Patni",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-08-10T16:42:50Z",
+        "subtotal": 2475,
+        "service_charge": 247.5,
+        "tax": 123.75,
+        "total": 2846.25,
+        "items": [
+            {
+                "name": "Belgian Dark Strong Ale",
+                "variant": "Dispenser (3L)",
+                "price": 2475,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178748978779",
+        "table_no": "5",
+        "customer_name": "Sanskar",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-08-23T12:56:27Z",
+        "subtotal": 750,
+        "service_charge": 75,
+        "tax": 37.5,
+        "total": 862.5,
+        "items": [
+            {
+                "name": "Downtown Spring Rolls",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            },
+            {
+                "name": "Luka Caesar Salad (Veg)",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178749379178",
+        "table_no": "5",
+        "customer_name": "Silky",
+        "customer_phone": "9039368694",
+        "timestamp": "2026-08-23T14:03:11Z",
+        "subtotal": 1550,
+        "service_charge": 155,
+        "tax": 77.5,
+        "total": 1782.5,
+        "items": [
+            {
+                "name": "Crispy Corn Kernels",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            },
+            {
+                "name": "Belgian Wit",
+                "variant": "Pitcher (1.5L)",
+                "price": 1175,
+                "quantity": 1
+            }
+        ]
+    },
+    {
+        "invoice_id": "INV-178777515444",
+        "table_no": "5",
+        "customer_name": "Sanskar",
+        "customer_phone": "8269590680",
+        "timestamp": "2026-08-26T20:12:34Z",
+        "subtotal": 650,
+        "service_charge": 65,
+        "tax": 32.5,
+        "total": 747.5,
+        "items": [
+            {
+                "name": "Crispy Corn Kernels",
+                "variant": "Portion",
+                "price": 375,
+                "quantity": 1
+            },
+            {
+                "name": "Crispy Onion Rings",
+                "variant": "Portion",
+                "price": 275,
+                "quantity": 1
+            }
+        ]
+    }
+]
