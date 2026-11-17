@@ -1,0 +1,9 @@
+# Downtown Luka — Hostinger API Router
+# Routes all /api/* requests to api.php
+
+RewriteEngine On
+
+# Redirect /api/anything to api.php?route=anything
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^api/(.*)$ api.php?route=$1 [QSA,L]

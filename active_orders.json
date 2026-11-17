@@ -1,0 +1,71 @@
+{
+    "table_5": {
+        "table_no": "5",
+        "session_id": "sess_1794932967",
+        "customer_name": "Sanskar Patni",
+        "customer_phone": "8269590680",
+        "status": "Active",
+        "orders": [
+            {
+                "order_id": "ord_1794932967482",
+                "timestamp": "2026-11-17T16:29:27Z",
+                "status": "Received",
+                "items": [
+                    {
+                        "id": "item-crispy-corn",
+                        "name": "Crispy Corn Kernels",
+                        "variant": "Portion",
+                        "price": 375,
+                        "quantity": 1
+                    }
+                ]
+            }
+        ]
+    },
+    "table_1": {
+        "table_no": "1",
+        "session_id": "sess_1794932980",
+        "customer_name": "Sanskar Patni",
+        "customer_phone": "8269590680",
+        "status": "Active",
+        "orders": [
+            {
+                "order_id": "ord_1794932980682",
+                "timestamp": "2026-11-17T16:29:40Z",
+                "status": "Received",
+                "items": [
+                    {
+                        "id": "item-beer-german",
+                        "name": "South German Wheat Beer",
+                        "variant": "Mug (500ml)",
+                        "price": 425,
+                        "quantity": 1
+                    }
+                ]
+            }
+        ]
+    },
+    "table_3": {
+        "table_no": "3",
+        "session_id": "sess_1794933023",
+        "customer_name": "Sanskar Patni",
+        "customer_phone": "8269590680",
+        "status": "Active",
+        "orders": [
+            {
+                "order_id": "ord_1794933023440",
+                "timestamp": "2026-11-17T16:30:23Z",
+                "status": "Received",
+                "items": [
+                    {
+                        "id": "item-spring-rolls",
+                        "name": "Downtown Spring Rolls",
+                        "variant": "Portion",
+                        "price": 375,
+                        "quantity": 1
+                    }
+                ]
+            }
+        ]
+    }
+}
