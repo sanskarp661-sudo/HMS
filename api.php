@@ -94,11 +94,130 @@ function is_password_hash($value) {
 function write_audit_log($user, $action) {
     $log = read_json("audit_log.json", []);
     $log[] = [
-        "timestamp" => date("Y-m-d\TH:i:s\Z"),
-        "user" => $user,
+        "timestamp" => gmdate("Y-m-d\TH:i:s\Z"),
+        "user" => ($user === null || $user === '') ? 'System' : $user,
         "action" => $action
     ];
+    // Keep the file from growing forever: retain the latest 5,000 entries
+    if (count($log) > 5000) {
+        $log = array_slice($log, -5000);
+    }
     write_json("audit_log.json", $log);
+}
+
+// ─── Settings ───────────────────────────────────────────────────────────────
+function default_settings() {
+    return [
+        "business_name"        => "Downtown Luka",
+        "business_address"     => "Cyberhub, Sector 24, Gurugram",
+        "business_phone"       => "",
+        "gstin"                => "",
+        "tables_count"         => 15,
+        "payment_methods"      => ["UPI" => true, "Cash" => true, "Card" => true],
+        "bom_enabled"          => false,
+        "bom_deduct_on"        => "order",   // "order" = when the order is placed, "settle" = when the bill is paid
+        "block_on_low_stock"   => false,     // reject orders that would take stock below zero
+    ];
+}
+
+function get_settings() {
+    $s = array_replace(default_settings(), read_json("settings.json", []));
+    $s['payment_methods'] = array_replace(default_settings()['payment_methods'], is_array($s['payment_methods']) ? $s['payment_methods'] : []);
+    return $s;
+}
+
+function enabled_payment_methods() {
+    $out = [];
+    foreach (get_settings()['payment_methods'] as $m => $on) {
+        if ($on) $out[] = $m;
+    }
+    return $out;
+}
+
+function require_bom_enabled() {
+    if (!get_settings()['bom_enabled']) {
+        http_response_code(400);
+        echo json_encode(["status" => "error", "message" => "BOM & Inventory is turned off. An Admin can enable it in Settings."]);
+        exit;
+    }
+}
+
+function money($v) {
+    return round(floatval($v), 2);
+}
+
+function lookup_menu_item_any($item_id) {
+    $md = read_json("menu_data.json", []);
+    foreach (isset($md['items']) ? $md['items'] : [] as $it) {
+        if (isset($it['id']) && $it['id'] === $item_id) return $it;
+    }
+    return null;
+}
+
+// ─── BOM / Inventory helpers ────────────────────────────────────────────────
+// inventory.json : { "materials": [ {id, name, unit, stock, reorder_level, cost_per_unit} ] }
+// bom.json       : { "<item_id>": { "<variant label>": [ {material_id, qty} ] } }
+// stock_ledger.json : [ {timestamp, material_id, name, delta, balance, reason, user} ]
+function add_ledger_entries($entries) {
+    if (count($entries) === 0) return;
+    $ledger = read_json("stock_ledger.json", []);
+    foreach ($entries as $e) $ledger[] = $e;
+    if (count($ledger) > 5000) $ledger = array_slice($ledger, -5000);
+    write_json("stock_ledger.json", $ledger);
+}
+
+// Works out how much of each raw material a list of sold items uses.
+function bom_requirements($items) {
+    $bom = read_json("bom.json", []);
+    $need = [];
+    foreach ($items as $it) {
+        $id = isset($it['id']) ? $it['id'] : '';
+        $variant = isset($it['variant']) ? $it['variant'] : '';
+        $qty = isset($it['quantity']) ? intval($it['quantity']) : 0;
+        if ($id === '' || $qty < 1 || !isset($bom[$id][$variant]) || !is_array($bom[$id][$variant])) continue;
+        foreach ($bom[$id][$variant] as $ing) {
+            $mid = isset($ing['material_id']) ? $ing['material_id'] : '';
+            if ($mid === '') continue;
+            $need[$mid] = (isset($need[$mid]) ? $need[$mid] : 0) + floatval($ing['qty']) * $qty;
+        }
+    }
+    return $need;
+}
+
+// Returns a list of materials that do not have enough stock (empty = all fine).
+function bom_shortages($need) {
+    $inv = read_json("inventory.json", ["materials" => []]);
+    $short = [];
+    foreach ($inv['materials'] as $m) {
+        if (isset($need[$m['id']]) && floatval($m['stock']) < $need[$m['id']]) {
+            $short[] = $m['name'];
+        }
+    }
+    return $short;
+}
+
+// Deducts stock for sold items and records each movement in the ledger.
+function bom_deduct($items, $reason, $user) {
+    $need = bom_requirements($items);
+    if (count($need) === 0) return;
+    $inv = read_json("inventory.json", ["materials" => []]);
+    $entries = [];
+    foreach ($inv['materials'] as &$m) {
+        if (!isset($need[$m['id']])) continue;
+        $m['stock'] = round(floatval($m['stock']) - $need[$m['id']], 3);
+        $entries[] = [
+            "timestamp"   => gmdate("Y-m-d\TH:i:s\Z"),
+            "material_id" => $m['id'],
+            "name"        => $m['name'],
+            "delta"       => -round($need[$m['id']], 3),
+            "balance"     => $m['stock'],
+            "reason"      => $reason,
+            "user"        => $user ?: 'System',
+        ];
+    }
+    unset($m);
+    write_json("inventory.json", $inv);
+    add_ledger_entries($entries);
 }
 
 // Role is re-read from users.json on every request, so a deleted or
@@ -178,7 +297,9 @@ switch ($route) {
                 exit;
             }
             write_json("menu_data.json", ["categories" => $input['categories'], "items" => $input['items']]);
-            write_audit_log($staff_user, "Modified Menu Catalog");
+            // The page describes what changed (e.g. 'Updated menu item: "Dal Makhani"')
+            $action = isset($_SERVER['HTTP_X_AUDIT_ACTION']) ? clean_text(urldecode($_SERVER['HTTP_X_AUDIT_ACTION']), 200) : '';
+            write_audit_log($staff_user, $action !== '' ? $action : "Modified Menu Catalog");
             echo json_encode(["status" => "ok"]);
         }
         break;
@@ -347,10 +468,19 @@ switch ($route) {
         if ($method === 'GET') {
             require_role($staff_user, ['Admin', 'Owner']);
             $log = read_json("audit_log.json", []);
-            usort($log, function($a, $b) {
+            $clean = [];
+            foreach ($log as $entry) {
+                if (!is_array($entry)) continue;
+                $clean[] = [
+                    "timestamp" => isset($entry['timestamp']) ? (string)$entry['timestamp'] : '',
+                    "user"      => isset($entry['user']) ? (string)$entry['user'] : 'System',
+                    "action"    => isset($entry['action']) ? (string)$entry['action'] : '',
+                ];
+            }
+            usort($clean, function($a, $b) {
                 return strcmp($b['timestamp'], $a['timestamp']); // newest first
             });
-            echo json_encode($log);
+            echo json_encode(array_slice($clean, 0, 2000));
         }
         break;
 
@@ -402,6 +532,17 @@ switch ($route) {
                 exit;
             }
 
+            // BOM: optionally refuse the order if raw materials are short
+            $settings = get_settings();
+            if ($settings['bom_enabled'] && $settings['block_on_low_stock']) {
+                $short = bom_shortages(bom_requirements($items));
+                if (count($short) > 0) {
+                    http_response_code(409);
+                    echo json_encode(["status" => "error", "message" => "Sorry, some items are out of stock right now (" . implode(", ", $short) . "). Please ask our staff."]);
+                    exit;
+                }
+            }
+
             $active = read_json("active_orders.json", []);
             $key = "table_" . $table_no;
 
@@ -428,6 +569,9 @@ switch ($route) {
             
             write_json("active_orders.json", $active);
             write_audit_log("Customer", "Placed order round for Table " . $table_no);
+            if ($settings['bom_enabled'] && $settings['bom_deduct_on'] === 'order') {
+                bom_deduct($items, "Order $order_id (Table $table_no)", "Customer");
+            }
             echo json_encode(["status" => "ok", "message" => "Order round placed.", "order_id" => $order_id]);
         }
         break;
@@ -495,29 +639,32 @@ switch ($route) {
         if ($method === 'POST') {
             require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
             $input = json_decode(file_get_contents("php://input"), true);
-            $table_no = isset($input['table_no']) ? $input['table_no'] : '';
+            $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
             
             $active = read_json("active_orders.json", []);
             $key = "table_" . $table_no;
             
-            if (!isset($active[$key])) {
+            if ($table_no === '' || !isset($active[$key])) {
                 http_response_code(404);
                 echo json_encode(["status" => "error", "message" => "No active session for Table $table_no"]);
                 exit;
             }
             
             $session = $active[$key];
+            $settings = get_settings();
             
             // Consolidate items
             $bill_items = [];
             $subtotal = 0;
             foreach ($session['orders'] as $ord) {
                 foreach ($ord['items'] as $it) {
-                    $item_key = $it['name'] . '||' . (isset($it['variant']) ? $it['variant'] : '');
+                    $variant = isset($it['variant']) ? $it['variant'] : 'Portion';
+                    $item_key = (isset($it['id']) ? $it['id'] : $it['name']) . '||' . $variant;
                     if (!isset($bill_items[$item_key])) {
                         $bill_items[$item_key] = [
+                            "id" => isset($it['id']) ? $it['id'] : '',
                             "name" => $it['name'],
-                            "variant" => isset($it['variant']) ? $it['variant'] : 'Portion',
+                            "variant" => $variant,
                             "price" => floatval($it['price']),
                             "quantity" => 0
                         ];
@@ -527,9 +674,56 @@ switch ($route) {
                 }
             }
             
-            $svc_charge = round($subtotal * 0.10, 2);
-            $tax = round($subtotal * 0.05, 2);
-            $total = $subtotal + $svc_charge + $tax;
+            $subtotal = money($subtotal);
+            $svc_charge = money($subtotal * 0.10);
+            $tax = money($subtotal * 0.05);
+            $total = money($subtotal + $svc_charge + $tax);
+
+            // ── Payment entry: one or more payments (split bill) ──
+            // Each payment = { method: "UPI" | "Cash" | "Card", amount }
+            // and together they must add up to the bill total.
+            $allowed_methods = enabled_payment_methods();
+            $raw_payments = isset($input['payments']) && is_array($input['payments']) ? $input['payments'] : [];
+            if (count($raw_payments) === 0) {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "Please record how the bill was paid (UPI, Cash or Card)."]);
+                exit;
+            }
+            if (count($raw_payments) > 50) {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "A bill can be split into at most 50 payments."]);
+                exit;
+            }
+            $payments = [];
+            $paid = 0;
+            foreach ($raw_payments as $i => $p) {
+                $m = isset($p['method']) ? (string)$p['method'] : '';
+                $amt = money(isset($p['amount']) ? $p['amount'] : 0);
+                if (!in_array($m, $allowed_methods, true)) {
+                    http_response_code(400);
+                    echo json_encode(["status" => "error", "message" => "Payment " . ($i + 1) . ": choose a payment method (" . implode(", ", $allowed_methods) . ")."]);
+                    exit;
+                }
+                if ($amt <= 0) {
+                    http_response_code(400);
+                    echo json_encode(["status" => "error", "message" => "Payment " . ($i + 1) . ": amount must be more than ₹0."]);
+                    exit;
+                }
+                $ref = isset($p['reference']) ? clean_text($p['reference'], 40) : '';
+                $label = isset($p['label']) ? clean_text($p['label'], 30) : ('Payment ' . ($i + 1));
+                $payments[] = ["label" => $label, "method" => $m, "amount" => $amt, "reference" => $ref];
+                $paid += $amt;
+            }
+            if (abs(money($paid) - $total) > 0.01) {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "Payments add up to ₹" . money($paid) . " but the bill total is ₹$total."]);
+                exit;
+            }
+            $methods_used = array_values(array_unique(array_column($payments, 'method')));
+            $payment_mode = count($payments) > 1
+                ? "Split (" . count($payments) . ") · " . implode(" + ", $methods_used)
+                : $payments[0]['method'];
+
             // Unguessable ID, so people cannot browse other customers' bills
             $invoice_id = "INV-" . time() . "-" . strtoupper(bin2hex(random_bytes(4)));
             
@@ -538,12 +732,15 @@ switch ($route) {
                 "table_no" => $table_no,
                 "customer_name" => $session['customer_name'],
                 "customer_phone" => $session['customer_phone'],
-                "timestamp" => date("Y-m-d\TH:i:s\Z"),
+                "timestamp" => gmdate("Y-m-d\TH:i:s\Z"),
                 "subtotal" => $subtotal,
                 "service_charge" => $svc_charge,
                 "tax" => $tax,
                 "total" => $total,
-                "items" => array_values($bill_items)
+                "items" => array_values($bill_items),
+                "payments" => $payments,
+                "payment_mode" => $payment_mode,
+                "settled_by" => $staff_user
             ];
             
             // Save invoice
@@ -554,19 +751,28 @@ switch ($route) {
             // Delete active table
             unset($active[$key]);
             write_json("active_orders.json", $active);
+
+            // BOM: deduct stock now if configured to do it at settlement
+            if ($settings['bom_enabled'] && $settings['bom_deduct_on'] === 'settle') {
+                bom_deduct(array_values($bill_items), "Invoice $invoice_id (Table $table_no)", $staff_user);
+            }
             
             // Mock SMS sending log
+            $scheme = $is_https ? "https://" : "http://";
+            $base_dir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'])), '/');
             $sms_sent = read_json("sms_sent.json", []);
-            $sms_msg = "Thank You for Visiting Downtown Luka, Here's your e-bill: http://" . $_SERVER['HTTP_HOST'] . dirname($_SERVER['SCRIPT_NAME']) . "/invoice.html?id=" . $invoice_id;
+            $sms_msg = "Thank You for Visiting " . $settings['business_name'] . ", Here's your e-bill: " . $scheme . $_SERVER['HTTP_HOST'] . $base_dir . "/invoice.html?id=" . $invoice_id;
             $sms_sent[] = [
-                "timestamp" => date("Y-m-d\TH:i:s\Z"),
+                "timestamp" => gmdate("Y-m-d\TH:i:s\Z"),
                 "to" => $session['customer_phone'],
                 "message" => $sms_msg
             ];
             write_json("sms_sent.json", $sms_sent);
             
-            write_audit_log($staff_user, "Generated Invoice for Table $table_no. Total: ₹$total");
-            write_audit_log("System", "Sent SMS e-bill to customer (" . $session['customer_phone'] . ")");
+            write_audit_log($staff_user, "Settled Table $table_no — Invoice $invoice_id, Total ₹$total, Paid by $payment_mode");
+            if ($session['customer_phone'] !== '') {
+                write_audit_log("System", "Sent SMS e-bill to customer (" . mask_phone($session['customer_phone']) . ")");
+            }
             
             echo json_encode([
                 "status" => "ok",
@@ -762,7 +968,11 @@ switch ($route) {
                 "active_tables" => $active_tables,
                 "avg_bill" => round($avg_bill, 2),
                 "monthly_revenue" => round($monthly_revenue, 2),
-                "pending_orders" => $pending
+                "pending_orders" => $pending,
+                "bom_enabled" => get_settings()['bom_enabled'],
+                "low_stock_count" => count(array_filter(read_json("inventory.json", ["materials" => []])['materials'], function($m) {
+                    return floatval($m['stock']) <= floatval($m['reorder_level']);
+                }))
             ]);
         }
         break;
@@ -878,6 +1088,254 @@ switch ($route) {
             }
             echo json_encode($result);
         }
+        break;
+
+    // 21. GET/POST /api/settings (Admin only)
+    case 'settings':
+        require_role($staff_user, ['Admin']);
+        if ($method === 'GET') {
+            echo json_encode(get_settings());
+        } elseif ($method === 'POST') {
+            $input = json_decode(file_get_contents("php://input"), true);
+            if (!is_array($input)) {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "Invalid settings."]);
+                exit;
+            }
+            $old = get_settings();
+            $new = $old;
+            if (isset($input['business_name']))    $new['business_name']    = clean_text($input['business_name'], 80) ?: $old['business_name'];
+            if (isset($input['business_address'])) $new['business_address'] = clean_text($input['business_address'], 160);
+            if (isset($input['business_phone']))   $new['business_phone']   = clean_text($input['business_phone'], 20);
+            if (isset($input['gstin']))            $new['gstin']            = strtoupper(clean_text($input['gstin'], 20));
+            if (isset($input['tables_count']))     $new['tables_count']     = max(1, min(200, intval($input['tables_count'])));
+            if (isset($input['payment_methods']) && is_array($input['payment_methods'])) {
+                foreach (array_keys(default_settings()['payment_methods']) as $m) {
+                    if (isset($input['payment_methods'][$m])) $new['payment_methods'][$m] = (bool)$input['payment_methods'][$m];
+                }
+                if (!in_array(true, $new['payment_methods'], true)) {
+                    http_response_code(400);
+                    echo json_encode(["status" => "error", "message" => "Keep at least one payment method turned on."]);
+                    exit;
+                }
+            }
+            if (isset($input['bom_enabled']))        $new['bom_enabled']        = (bool)$input['bom_enabled'];
+            if (isset($input['bom_deduct_on']))      $new['bom_deduct_on']      = $input['bom_deduct_on'] === 'settle' ? 'settle' : 'order';
+            if (isset($input['block_on_low_stock'])) $new['block_on_low_stock'] = (bool)$input['block_on_low_stock'];
+            write_json("settings.json", $new);
+
+            // Describe what changed for the audit log
+            $changes = [];
+            foreach ($new as $k => $v) {
+                if ($old[$k] !== $v) {
+                    if ($k === 'bom_enabled') $changes[] = "BOM & Inventory " . ($v ? "enabled" : "disabled");
+                    elseif ($k === 'payment_methods') {
+                        foreach ($v as $m => $on) if ($old[$k][$m] !== $on) $changes[] = "$m payments " . ($on ? "enabled" : "disabled");
+                    } else $changes[] = str_replace('_', ' ', $k) . " → " . (is_bool($v) ? ($v ? 'on' : 'off') : $v);
+                }
+            }
+            write_audit_log($staff_user, "Updated Settings" . (count($changes) ? ": " . implode("; ", $changes) : " (no changes)"));
+            echo json_encode(["status" => "ok", "settings" => $new]);
+        }
+        break;
+
+    // 22. GET /api/settings/public — safe subset for pages and staff of all roles
+    case 'settings/public':
+        $s = get_settings();
+        echo json_encode([
+            "business_name"    => $s['business_name'],
+            "business_address" => $s['business_address'],
+            "business_phone"   => $s['business_phone'],
+            "gstin"            => $s['gstin'],
+            "tables_count"     => $s['tables_count'],
+            "payment_methods"  => enabled_payment_methods(),
+            "bom_enabled"      => $s['bom_enabled'],
+        ]);
+        break;
+
+    // 23. GET/POST /api/inventory — raw materials
+    case 'inventory':
+        require_bom_enabled();
+        if ($method === 'GET') {
+            require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+            echo json_encode(read_json("inventory.json", ["materials" => []]));
+        } elseif ($method === 'POST') {
+            $input = json_decode(file_get_contents("php://input"), true);
+            $action = isset($input['action']) ? $input['action'] : '';
+            // Receptionists may record stock received; only Admin/Owner edit the material list
+            require_role($staff_user, $action === 'adjust' ? ['Admin', 'Owner', 'Receptionist'] : ['Admin', 'Owner']);
+            $inv = read_json("inventory.json", ["materials" => []]);
+            $valid_units = ['kg', 'g', 'L', 'ml', 'pcs', 'pack', 'bottle', 'dozen'];
+
+            if ($action === 'save') {
+                $m = isset($input['material']) && is_array($input['material']) ? $input['material'] : [];
+                $name = clean_text(isset($m['name']) ? $m['name'] : '', 60);
+                $unit = isset($m['unit']) && in_array($m['unit'], $valid_units, true) ? $m['unit'] : 'pcs';
+                if ($name === '') {
+                    http_response_code(400);
+                    echo json_encode(["status" => "error", "message" => "Material name is required."]);
+                    exit;
+                }
+                $fields = [
+                    "name" => $name,
+                    "unit" => $unit,
+                    "reorder_level" => max(0, round(floatval(isset($m['reorder_level']) ? $m['reorder_level'] : 0), 3)),
+                    "cost_per_unit" => max(0, money(isset($m['cost_per_unit']) ? $m['cost_per_unit'] : 0)),
+                ];
+                $id = isset($m['id']) ? (string)$m['id'] : '';
+                $found = false;
+                foreach ($inv['materials'] as &$row) {
+                    if ($id !== '' && $row['id'] === $id) { $row = array_merge($row, $fields); $found = true; break; }
+                }
+                unset($row);
+                if (!$found) {
+                    $opening = max(0, round(floatval(isset($m['stock']) ? $m['stock'] : 0), 3));
+                    $id = "mat-" . time() . "-" . bin2hex(random_bytes(3));
+                    $inv['materials'][] = array_merge(["id" => $id, "stock" => $opening], $fields);
+                    if ($opening > 0) {
+                        add_ledger_entries([["timestamp" => gmdate("Y-m-d\TH:i:s\Z"), "material_id" => $id, "name" => $name,
+                            "delta" => $opening, "balance" => $opening, "reason" => "Opening stock", "user" => $staff_user]]);
+                    }
+                }
+                write_json("inventory.json", $inv);
+                write_audit_log($staff_user, ($found ? "Updated" : "Added") . " raw material: \"$name\"");
+                echo json_encode(["status" => "ok", "id" => $id]);
+
+            } elseif ($action === 'delete') {
+                $id = isset($input['id']) ? (string)$input['id'] : '';
+                $bom = read_json("bom.json", []);
+                foreach ($bom as $item_id => $variants) {
+                    foreach ($variants as $ings) {
+                        foreach ($ings as $ing) {
+                            if ($ing['material_id'] === $id) {
+                                http_response_code(400);
+                                echo json_encode(["status" => "error", "message" => "This material is used in a recipe. Remove it from the recipe first."]);
+                                exit;
+                            }
+                        }
+                    }
+                }
+                $name = $id;
+                $inv['materials'] = array_values(array_filter($inv['materials'], function($row) use ($id, &$name) {
+                    if ($row['id'] === $id) { $name = $row['name']; return false; }
+                    return true;
+                }));
+                write_json("inventory.json", $inv);
+                write_audit_log($staff_user, "Deleted raw material: \"$name\"");
+                echo json_encode(["status" => "ok"]);
+
+            } elseif ($action === 'adjust') {
+                // Stock in (purchase), wastage, or correction after a stock count
+                $id = isset($input['id']) ? (string)$input['id'] : '';
+                $delta = round(floatval(isset($input['delta']) ? $input['delta'] : 0), 3);
+                $note = clean_text(isset($input['note']) ? $input['note'] : '', 80);
+                if ($delta == 0) {
+                    http_response_code(400);
+                    echo json_encode(["status" => "error", "message" => "Enter a quantity to add or remove."]);
+                    exit;
+                }
+                $done = null;
+                foreach ($inv['materials'] as &$row) {
+                    if ($row['id'] === $id) {
+                        $row['stock'] = round(floatval($row['stock']) + $delta, 3);
+                        $done = $row;
+                        break;
+                    }
+                }
+                unset($row);
+                if ($done === null) {
+                    http_response_code(404);
+                    echo json_encode(["status" => "error", "message" => "Material not found."]);
+                    exit;
+                }
+                write_json("inventory.json", $inv);
+                $reason = ($delta > 0 ? "Stock in" : "Stock out") . ($note !== '' ? " — $note" : "");
+                add_ledger_entries([["timestamp" => gmdate("Y-m-d\TH:i:s\Z"), "material_id" => $id, "name" => $done['name'],
+                    "delta" => $delta, "balance" => $done['stock'], "reason" => $reason, "user" => $staff_user]]);
+                write_audit_log($staff_user, "Stock adjusted: " . $done['name'] . " " . ($delta > 0 ? "+" : "") . $delta . " " . $done['unit'] . ($note !== '' ? " ($note)" : ""));
+                echo json_encode(["status" => "ok", "stock" => $done['stock']]);
+
+            } else {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "Unknown inventory action."]);
+            }
+        }
+        break;
+
+    // 24. GET /api/inventory/ledger — latest stock movements
+    case 'inventory/ledger':
+        require_bom_enabled();
+        require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+        $ledger = array_reverse(read_json("stock_ledger.json", []));
+        echo json_encode(array_slice($ledger, 0, 300));
+        break;
+
+    // 25. GET/POST /api/bom — recipes linking menu items to raw materials
+    case 'bom':
+        require_bom_enabled();
+        if ($method === 'GET') {
+            require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+            echo json_encode((object)read_json("bom.json", []));
+        } elseif ($method === 'POST') {
+            require_role($staff_user, ['Admin', 'Owner']);
+            $input = json_decode(file_get_contents("php://input"), true);
+            $item_id = isset($input['item_id']) ? (string)$input['item_id'] : '';
+            $variant = isset($input['variant']) ? (string)$input['variant'] : '';
+            $menu_item = lookup_menu_item_any($item_id);
+            if ($menu_item === null) {
+                http_response_code(404);
+                echo json_encode(["status" => "error", "message" => "Menu item not found."]);
+                exit;
+            }
+            $variant_labels = array_column(isset($menu_item['price_variants']) ? $menu_item['price_variants'] : [], 'label');
+            if (!in_array($variant, $variant_labels, true)) {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "Unknown size/variant for this item."]);
+                exit;
+            }
+            $inv = read_json("inventory.json", ["materials" => []]);
+            $material_ids = array_column($inv['materials'], 'id');
+            $ings = [];
+            $raw = isset($input['ingredients']) && is_array($input['ingredients']) ? $input['ingredients'] : [];
+            foreach ($raw as $ing) {
+                $mid = isset($ing['material_id']) ? (string)$ing['material_id'] : '';
+                $qty = round(floatval(isset($ing['qty']) ? $ing['qty'] : 0), 4);
+                if (!in_array($mid, $material_ids, true) || $qty <= 0) continue;
+                $ings[] = ["material_id" => $mid, "qty" => $qty];
+            }
+            $bom = read_json("bom.json", []);
+            if (count($ings) === 0) {
+                unset($bom[$item_id][$variant]);
+                if (isset($bom[$item_id]) && count($bom[$item_id]) === 0) unset($bom[$item_id]);
+            } else {
+                $bom[$item_id][$variant] = $ings;
+            }
+            write_json("bom.json", (object)$bom);
+            write_audit_log($staff_user, "Updated recipe (BOM) for \"" . $menu_item['name'] . "\" — $variant (" . count($ings) . " ingredients)");
+            echo json_encode(["status" => "ok"]);
+        }
+        break;
+
+    // 26. GET /api/dashboard/payments — revenue by payment method (last 30 days)
+    case 'dashboard/payments':
+        require_role($staff_user, ['Admin', 'Owner']);
+        $invoices = read_json("invoices.json", []);
+        $cutoff = time() - (30 * 86400);
+        $by = [];
+        foreach ($invoices as $inv) {
+            if (strtotime($inv['timestamp']) < $cutoff) continue;
+            $pays = isset($inv['payments']) && is_array($inv['payments']) && count($inv['payments'])
+                ? $inv['payments']
+                : [["method" => "Not recorded", "amount" => $inv['total']]];
+            foreach ($pays as $p) {
+                $m = $p['method'];
+                if (!isset($by[$m])) $by[$m] = ["method" => $m, "amount" => 0, "count" => 0];
+                $by[$m]['amount'] = money($by[$m]['amount'] + $p['amount']);
+                $by[$m]['count']++;
+            }
+        }
+        usort($by, function($a, $b) { return $b['amount'] <=> $a['amount']; });
+        echo json_encode(array_values($by));
         break;
 
     // 20. POST /api/log-error

@@ -1,253 +1,200 @@
 /**
- * dashboard.js — Sales Analytics Dashboard Logic
- * Downtown Luka v1.1
- * Requires: Chart.js (loaded in admin.html)
+ * dashboard.js — Sales analytics for Mosaic Engine HMS
+ * Requires Chart.js (loaded in admin.html).
  */
 
-// ─── Chart instances (kept for destroy on re-render) ────────────────────────
-let chartRevenue  = null;
+let chartRevenue = null;
 let chartCategory = null;
-let chartHourly   = null;
+let chartHourly = null;
+let chartPayments = null;
 
-// ─── Main loader ─────────────────────────────────────────────────────────────
+const DB_COLORS = {
+  teal: "#2f5d5c", tealSoft: "rgba(47,93,92,0.14)",
+  orange: "#d97e4a", orangeSoft: "rgba(217,126,74,0.18)",
+  grid: "rgba(31,46,45,0.07)", tick: "#6b7776",
+  palette: ["#2f5d5c", "#d97e4a", "#5b8c8a", "#e8b04b", "#8e6bbf", "#c95b5b", "#4f9d69", "#3f7cac", "#a3a380", "#b77b5c"]
+};
+
+function dbMoney(n) {
+  return "₹" + (Number(n) || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+}
+
 function loadDashboard() {
-  const staff = sessionStorage.getItem("luka_logged_user") || "admin";
-  const headers = { "X-Staff-User": encodeURIComponent(staff) };
-
-  // Safeguard: Check if Chart.js is loaded (offline or CDN blocked)
+  const cards = document.getElementById("db-summary-cards");
   if (typeof Chart === "undefined") {
-    document.getElementById("db-summary-cards").innerHTML = `
-      <div style="grid-column: 1 / -1; padding: 24px; text-align: center; color: #fb923c; background: rgba(251,146,60,0.08); border: 1px solid rgba(251,146,60,0.2); border-radius: 12px; margin-bottom: 20px;">
-        <i class="fas fa-exclamation-triangle" style="font-size: 28px; margin-bottom: 12px;"></i>
-        <h3 style="font-size: 16px; font-weight: 700; color: #f3f4f6;">Chart.js CDN Offline / Failed to Load</h3>
-        <p style="font-size: 13px; color: #9ca3af; margin-top: 6px; max-width: 500px; margin-left: auto; margin-right: auto;">
-          The Analytics Dashboard requires an active internet connection to load the Chart.js visualization library. 
-          Please check your network connection and refresh.
-        </p>
-      </div>
-    `;
+    cards.innerHTML = `<div class="notice warn" style="grid-column:1/-1;margin:0;"><i class="fas fa-triangle-exclamation"></i>
+      <div><b>Charts could not load.</b> The dashboard needs an internet connection for its chart library. Check the connection and press Refresh.</div></div>`;
     return;
   }
+  cards.innerHTML = Array(6).fill('<div class="stat-card skeleton"></div>').join("");
 
-  // Show loading state
-  document.getElementById("db-summary-cards").innerHTML = dashLoadingCards();
+  const get = path => fetch(path, { credentials: "same-origin" }).then(r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  });
 
   Promise.all([
-    fetch("/api/dashboard/summary",    { headers }).then(r => r.json()),
-    fetch("/api/dashboard/revenue",    { headers }).then(r => r.json()),
-    fetch("/api/dashboard/items",      { headers }).then(r => r.json()),
-    fetch("/api/dashboard/categories", { headers }).then(r => r.json()),
-    fetch("/api/dashboard/hourly",     { headers }).then(r => r.json()),
+    get("/api/dashboard/summary"),
+    get("/api/dashboard/revenue"),
+    get("/api/dashboard/items"),
+    get("/api/dashboard/categories"),
+    get("/api/dashboard/hourly"),
+    get("/api/dashboard/payments"),
   ])
-  .then(([summary, revenue, items, categories, hourly]) => {
+  .then(([summary, revenue, items, categories, hourly, payments]) => {
     renderSummaryCards(summary);
     renderRevenueChart(revenue);
     renderTopItems(items);
     renderCategoryChart(categories);
     renderHourlyChart(hourly);
+    renderPaymentsChart(payments);
   })
   .catch(err => {
     console.error("Dashboard load error:", err);
-    document.getElementById("db-summary-cards").innerHTML =
-      `<p style="color:#ef4444;padding:20px;">Failed to load dashboard data. Please try again.</p>`;
+    cards.innerHTML = `<div class="notice warn" style="grid-column:1/-1;margin:0;"><i class="fas fa-triangle-exclamation"></i><div>Could not load dashboard data. Please press Refresh.</div></div>`;
   });
 }
 
-// ─── Summary Cards ───────────────────────────────────────────────────────────
-function renderSummaryCards(data) {
+function renderSummaryCards(d) {
   const cards = [
-    { icon: "fa-indian-rupee-sign", label: "Today's Revenue",   value: `₹${(data.today_revenue || 0).toLocaleString("en-IN")}`, color: "#f59e0b", bg: "rgba(245,158,11,0.1)" },
-    { icon: "fa-receipt",           label: "Today's Invoices",   value: data.today_invoices || 0,                                  color: "#60a5fa", bg: "rgba(96,165,250,0.1)" },
-    { icon: "fa-chair",             label: "Active Tables",       value: data.active_tables || 0,                                   color: "#34d399", bg: "rgba(52,211,153,0.1)" },
-    { icon: "fa-calculator",        label: "Average Bill",        value: `₹${(data.avg_bill || 0).toLocaleString("en-IN", {maximumFractionDigits:0})}`, color: "#a78bfa", bg: "rgba(167,139,250,0.1)" },
-    { icon: "fa-calendar-days",     label: "Monthly Revenue",     value: `₹${(data.monthly_revenue || 0).toLocaleString("en-IN")}`, color: "#fb923c", bg: "rgba(251,146,60,0.1)" },
-    { icon: "fa-fire-flame-curved", label: "Pending Kitchen Orders", value: data.pending_orders || 0,                               color: "#f87171", bg: "rgba(248,113,113,0.1)" },
+    { icon: "fa-indian-rupee-sign", label: "Today's revenue",   value: dbMoney(d.today_revenue),   fg: "#2f5d5c", bg: "#e7efee" },
+    { icon: "fa-receipt",           label: "Bills today",       value: d.today_invoices || 0,      fg: "#3f7cac", bg: "#e3eef7" },
+    { icon: "fa-chair",             label: "Tables dining now", value: d.active_tables || 0,       fg: "#4f9d69", bg: "#e4f3e9" },
+    { icon: "fa-calculator",        label: "Average bill",      value: dbMoney(d.avg_bill),        fg: "#8e6bbf", bg: "#efe9f7" },
+    { icon: "fa-calendar-days",     label: "Revenue · 30 days", value: dbMoney(d.monthly_revenue), fg: "#d97e4a", bg: "#fbeee5" },
+    { icon: "fa-fire-burner",       label: "Pending in kitchen", value: d.pending_orders || 0,     fg: "#c95b5b", bg: "#f9e6e6" },
   ];
-
+  if (d.bom_enabled) {
+    cards.push({ icon: "fa-boxes-stacked", label: "Low-stock materials", value: d.low_stock_count || 0, fg: d.low_stock_count ? "#b45309" : "#4f9d69", bg: d.low_stock_count ? "#fef3c7" : "#e4f3e9" });
+  }
   document.getElementById("db-summary-cards").innerHTML = cards.map(c => `
-    <div class="db-card">
-      <div class="db-card-icon" style="background:${c.bg}; color:${c.color};">
-        <i class="fas ${c.icon}"></i>
+    <div class="stat-card">
+      <div class="stat-icon" style="background:${c.bg};color:${c.fg};"><i class="fas ${c.icon}"></i></div>
+      <div style="min-width:0;">
+        <div class="stat-value">${c.value}</div>
+        <div class="stat-label">${c.label}</div>
       </div>
-      <div class="db-card-body">
-        <div class="db-card-value" style="color:${c.color}">${c.value}</div>
-        <div class="db-card-label">${c.label}</div>
-      </div>
-    </div>
-  `).join("");
-}
-
-function dashLoadingCards() {
-  return Array(6).fill(0).map(() => `
-    <div class="db-card" style="opacity:0.4;">
-      <div class="db-card-icon" style="background:rgba(255,255,255,0.05);"><i class="fas fa-spinner fa-spin"></i></div>
-      <div class="db-card-body"><div class="db-card-value">—</div><div class="db-card-label">Loading…</div></div>
     </div>`).join("");
 }
 
-// ─── Revenue Chart (30-day bar) ───────────────────────────────────────────────
-function renderRevenueChart(data) {
-  const labels = (data || []).map(d => d.date);
-  const values = (data || []).map(d => d.revenue);
-  const ctx    = document.getElementById("chart-revenue").getContext("2d");
+function baseScales(horizontal) {
+  const money = v => "₹" + Number(v).toLocaleString("en-IN");
+  return {
+    x: { grid: { color: horizontal ? DB_COLORS.grid : "transparent" }, ticks: { color: DB_COLORS.tick, font: { size: 11 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }, beginAtZero: true },
+    y: { grid: { color: horizontal ? "transparent" : DB_COLORS.grid }, ticks: { color: DB_COLORS.tick, font: { size: 11 }, callback: horizontal ? undefined : money }, beginAtZero: true }
+  };
+}
 
+function renderRevenueChart(data) {
+  const ctx = document.getElementById("chart-revenue").getContext("2d");
   if (chartRevenue) chartRevenue.destroy();
   chartRevenue = new Chart(ctx, {
     type: "bar",
     data: {
-      labels,
+      labels: (data || []).map(d => d.date),
       datasets: [{
-        label: "Daily Revenue (₹)",
-        data: values,
-        backgroundColor: "rgba(245,158,11,0.25)",
-        borderColor: "#f59e0b",
-        borderWidth: 2,
-        borderRadius: 6,
-        hoverBackgroundColor: "rgba(245,158,11,0.5)",
+        label: "Revenue",
+        data: (data || []).map(d => d.revenue),
+        backgroundColor: DB_COLORS.teal,
+        hoverBackgroundColor: DB_COLORS.orange,
+        borderRadius: 4,
+        maxBarThickness: 26,
       }]
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => `₹${ctx.parsed.y.toLocaleString("en-IN")}`
-          }
-        }
-      },
-      scales: {
-        x: {
-          grid: { color: "rgba(255,255,255,0.05)" },
-          ticks: { color: "#94a3b8", font: { size: 11 }, maxTicksLimit: 10 }
-        },
-        y: {
-          grid: { color: "rgba(255,255,255,0.05)" },
-          ticks: {
-            color: "#94a3b8",
-            callback: v => "₹" + v.toLocaleString("en-IN")
-          },
-          beginAtZero: true
-        }
-      }
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => dbMoney(c.parsed.y) } } },
+      scales: baseScales(false)
     }
   });
 }
 
-// ─── Category Doughnut ────────────────────────────────────────────────────────
 function renderCategoryChart(data) {
-  const labels = (data || []).map(d => d.category);
-  const values = (data || []).map(d => d.revenue);
-  const colours = [
-    "#f59e0b","#60a5fa","#34d399","#a78bfa","#fb923c",
-    "#f87171","#2dd4bf","#e879f9","#fbbf24","#4ade80"
-  ];
   const ctx = document.getElementById("chart-category").getContext("2d");
-
   if (chartCategory) chartCategory.destroy();
+  const list = (data || []).slice(0, 8);
   chartCategory = new Chart(ctx, {
     type: "doughnut",
     data: {
-      labels,
-      datasets: [{
-        data: values,
-        backgroundColor: colours.slice(0, labels.length),
-        borderWidth: 2,
-        borderColor: "#17171f",
-        hoverOffset: 6
-      }]
+      labels: list.map(d => d.category),
+      datasets: [{ data: list.map(d => d.revenue), backgroundColor: DB_COLORS.palette, borderColor: "#ffffff", borderWidth: 2 }]
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false, cutout: "62%",
       plugins: {
-        legend: {
-          position: "right",
-          labels: { color: "#94a3b8", font: { size: 11 }, padding: 12 }
-        },
-        tooltip: {
-          callbacks: {
-            label: ctx => `${ctx.label}: ₹${ctx.parsed.toLocaleString("en-IN")}`
-          }
-        }
+        legend: { position: "bottom", labels: { color: DB_COLORS.tick, font: { size: 11 }, boxWidth: 10, padding: 10 } },
+        tooltip: { callbacks: { label: c => `${c.label}: ${dbMoney(c.parsed)}` } }
       }
     }
   });
 }
 
-// ─── Peak Hours Chart ─────────────────────────────────────────────────────────
-function renderHourlyChart(data) {
-  const labels = (data || []).map(d => d.hour);
-  const values = (data || []).map(d => d.orders);
-  const ctx    = document.getElementById("chart-hourly").getContext("2d");
+function renderPaymentsChart(data) {
+  const ctx = document.getElementById("chart-payments").getContext("2d");
+  if (chartPayments) chartPayments.destroy();
+  const list = data || [];
+  const colors = { UPI: "#2f5d5c", Cash: "#d97e4a", Card: "#3f7cac", "Not recorded": "#c7c2b6" };
+  chartPayments = new Chart(ctx, {
+    type: "doughnut",
+    data: {
+      labels: list.map(d => `${d.method} (${d.count})`),
+      datasets: [{ data: list.map(d => d.amount), backgroundColor: list.map((d, i) => colors[d.method] || DB_COLORS.palette[i % 10]), borderColor: "#ffffff", borderWidth: 2 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: "62%",
+      plugins: {
+        legend: { position: "bottom", labels: { color: DB_COLORS.tick, font: { size: 11 }, boxWidth: 10, padding: 10 } },
+        tooltip: { callbacks: { label: c => `${c.label}: ${dbMoney(c.parsed)}` } }
+      }
+    }
+  });
+}
 
+function renderHourlyChart(data) {
+  const ctx = document.getElementById("chart-hourly").getContext("2d");
   if (chartHourly) chartHourly.destroy();
   chartHourly = new Chart(ctx, {
     type: "bar",
     data: {
-      labels,
-      datasets: [{
-        label: "Orders",
-        data: values,
-        backgroundColor: "rgba(96,165,250,0.25)",
-        borderColor: "#60a5fa",
-        borderWidth: 2,
-        borderRadius: 4,
-        hoverBackgroundColor: "rgba(96,165,250,0.5)",
-      }]
+      labels: (data || []).map(d => d.hour),
+      datasets: [{ label: "Bills", data: (data || []).map(d => d.orders), backgroundColor: DB_COLORS.orangeSoft, borderColor: DB_COLORS.orange, borderWidth: 1.5, borderRadius: 4, hoverBackgroundColor: DB_COLORS.orange }]
     },
     options: {
-      indexAxis: "y",
-      responsive: true,
-      maintainAspectRatio: false,
+      indexAxis: "y", responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
-      scales: {
-        x: {
-          grid: { color: "rgba(255,255,255,0.05)" },
-          ticks: { color: "#94a3b8" },
-          beginAtZero: true
-        },
-        y: {
-          grid: { display: false },
-          ticks: { color: "#94a3b8", font: { size: 11 } }
-        }
-      }
+      scales: baseScales(true)
     }
   });
 }
 
-// ─── Top Items Table ──────────────────────────────────────────────────────────
 function renderTopItems(data) {
   const tbody = document.getElementById("db-items-tbody");
-  if (!data || data.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#6b7280;padding:20px;">No sales data yet.</td></tr>`;
+  if (!data || !data.length) {
+    tbody.innerHTML = `<tr><td colspan="4" class="empty-cell">No sales yet.</td></tr>`;
     return;
   }
-  tbody.innerHTML = data.map((item, i) => `
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  tbody.innerHTML = data.slice(0, 10).map((item, i) => `
     <tr>
-      <td><span class="db-rank">#${i + 1}</span></td>
-      <td style="font-weight:600">${item.name}</td>
-      <td>${item.qty}</td>
-      <td style="color:#f59e0b;font-weight:700">₹${(item.revenue || 0).toLocaleString("en-IN")}</td>
-    </tr>
-  `).join("");
+      <td data-label="Rank"><span class="rank">${i + 1}</span></td>
+      <td data-label="Item" class="strong">${esc(item.name)}</td>
+      <td data-label="Qty sold">${item.qty}</td>
+      <td data-label="Revenue" class="amount">${dbMoney(item.revenue)}</td>
+    </tr>`).join("");
 }
 
-// ─── Export PDF ───────────────────────────────────────────────────────────────
 function exportDashboardPDF() {
-  const el = document.getElementById("sec-dashboard");
-  if (!window.html2pdf) { alert("PDF library not loaded."); return; }
-
-  window.showToast("Preparing PDF export…", "info");
-  const opt = {
-    margin:     [10, 10],
-    filename:   `DowntownLuka_Dashboard_${new Date().toLocaleDateString("en-IN").replace(/\//g,"-")}.pdf`,
-    image:      { type: "jpeg", quality: 0.95 },
-    html2canvas:{ scale: 1.5, backgroundColor: "#111118" },
-    jsPDF:      { unit: "mm", format: "a3", orientation: "landscape" }
-  };
-  html2pdf().set(opt).from(el).save().then(() => {
-    window.showToast("Dashboard PDF exported!", "success");
-  });
+  if (!window.html2pdf) {
+    window.showToast("PDF tool is still loading — try again in a moment.", "warning");
+    return;
+  }
+  window.showToast("Preparing PDF…", "info");
+  html2pdf().set({
+    margin: [10, 10],
+    filename: `MosaicEngine_Dashboard_${new Date().toLocaleDateString("en-IN").replace(/\//g, "-")}.pdf`,
+    image: { type: "jpeg", quality: 0.95 },
+    html2canvas: { scale: 1.5, backgroundColor: "#f4f2ed" },
+    jsPDF: { unit: "mm", format: "a3", orientation: "landscape" }
+  }).from(document.getElementById("sec-dashboard")).save()
+    .then(() => window.showToast("Dashboard PDF exported.", "success"));
 }

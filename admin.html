@@ -2,812 +2,828 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Downtown Luka — Menu Admin CMS</title>
-  
-  <!-- FontAwesome Icons -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#172a2a">
+  <title>Mosaic Engine HMS</title>
+
+  <link rel="icon" type="image/svg+xml" href="assets/img/mosaic-engine-icon.svg">
+  <link rel="apple-touch-icon" href="assets/img/mosaic-engine-icon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  
-  <!-- Global Stylesheet -->
-  <link rel="stylesheet" href="assets/css/menu.css">
-  <link rel="icon" type="image/jpeg" href="images.jpg">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="assets/css/admin.css">
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
   <script>
     window.onerror = function(msg, url, line, col, err) {
       fetch('/api/log-error', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: msg,
-          source: url,
-          lineno: line,
-          colno: col,
-          stack: err ? err.stack : ""
-        })
-      }).catch(console.error);
-      return false; // let the error bubble to console as usual
+        body: JSON.stringify({ message: msg, source: url, lineno: line, colno: col, stack: err ? err.stack : "" })
+      }).catch(function() {});
+      return false;
     };
   </script>
-  
-  <style>
-    /* Dashboard Styles */
-    .db-summary-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-    .db-card {
-      background: #1f2937;
-      border: 1px solid rgba(255,255,255,0.06);
-      border-radius: 12px;
-      padding: 18px;
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      transition: transform 0.2s;
-    }
-    .db-card:hover { transform: translateY(-2px); }
-    .db-card-icon {
-      width: 44px; height: 44px; border-radius: 10px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 18px; flex-shrink: 0;
-    }
-    .db-card-value { font-size: 22px; font-weight: 800; color: #f3f4f6; line-height: 1; }
-    .db-card-label { font-size: 11px; color: #9ca3af; margin-top: 4px; font-weight: 600; }
-    .db-charts-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 20px;
-      margin-bottom: 20px;
-    }
-    .db-chart-box {
-      background: #1f2937;
-      border: 1px solid rgba(255,255,255,0.06);
-      border-radius: 12px;
-      padding: 20px;
-    }
-    .db-chart-box.full-width { grid-column: 1 / -1; }
-    .db-chart-title {
-      font-size: 14px; font-weight: 700; color: #f3f4f6;
-      margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
-    }
-    .db-chart-title i { color: #f59e0b; }
-    .db-chart-wrap { position: relative; height: 240px; }
-    .db-chart-wrap.tall { height: 320px; }
-    .db-rank {
-      display: inline-block; min-width: 28px; height: 28px;
-      background: rgba(245,158,11,0.15); color: #f59e0b;
-      border-radius: 6px; font-weight: 800; font-size: 12px;
-      text-align: center; line-height: 28px;
-    }
-    /* Specific Admin styling overrides */
-    .admin-container {
-      display: flex;
-      flex-direction: column;
-      min-height: 100vh;
-      background: #f3f4f6;
-    }
-    .admin-main {
-      display: flex;
-      flex: 1;
-    }
-    .tab-section {
-      display: none;
-    }
-    .tab-section.active {
-      display: block;
-    }
-    .form-box {
-      background: #ffffff;
-      padding: 24px;
-      border-radius: var(--radius-md);
-      box-shadow: var(--shadow-sm);
-      border: 1px solid var(--border-color);
-      margin-bottom: 24px;
-    }
-    .drag-media-zone {
-      border: 2px dashed var(--border-color);
-      border-radius: var(--radius-sm);
-      padding: 24px;
-      text-align: center;
-      cursor: pointer;
-      background: #f9fafb;
-      position: relative;
-    }
-    .drag-media-zone.dragover {
-      border-color: var(--primary);
-      background: rgba(194, 65, 12, 0.04);
-    }
-    .media-preview-container {
-      margin-top: 12px;
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-    .preview-thumbnail {
-      width: 70px;
-      height: 70px;
-      object-fit: cover;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border-color);
-      position: relative;
-    }
-    .preview-thumbnail button {
-      position: absolute;
-      top: -6px;
-      right: -6px;
-      background: #ef4444;
-      color: #fff;
-      border: none;
-      border-radius: 50%;
-      width: 18px;
-      height: 18px;
-      font-size: 10px;
-      cursor: pointer;
-    }
-    .status-badge {
-      padding: 4px 8px;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 600;
-    }
-    .status-available { background: #d1fae5; color: #065f46; }
-    .status-86d { background: #fee2e2; color: #991b1b; }
-    .status-seasonal { background: #fef3c7; color: #92400e; }
-
-    /* Glowing indicators for active table orders */
-    .table-grid-btn {
-      background: rgba(255,255,255,0.05);
-      border: 1px solid rgba(255,255,255,0.1);
-      color: #fff;
-      padding: 16px 8px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-weight: 700;
-      text-align: center;
-      transition: all 0.2s;
-    }
-    .table-grid-btn:hover {
-      background: rgba(255,255,255,0.12);
-      border-color: rgba(255,255,255,0.2);
-    }
-    .table-grid-btn.active-table {
-      background: #c2410c;
-      border-color: #ea580c;
-      color: #fff;
-      animation: pulseActive 2s infinite;
-    }
-    .table-grid-btn.selected-table {
-      box-shadow: 0 0 0 2px #fff;
-    }
-    @keyframes pulseActive {
-      0% { box-shadow: 0 0 0 0 rgba(194, 65, 12, 0.5); }
-      70% { box-shadow: 0 0 0 8px rgba(194, 65, 12, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(194, 65, 12, 0); }
-    }
-    .table-grid-btn.checkout-requested-table {
-      background: #6d28d9;
-      border-color: #8b5cf6;
-      color: #fff;
-      animation: pulseCheckout 2s infinite;
-    }
-    @keyframes pulseCheckout {
-      0% { box-shadow: 0 0 0 0 rgba(109, 40, 217, 0.5); }
-      70% { box-shadow: 0 0 0 8px rgba(109, 40, 217, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(109, 40, 217, 0); }
-    }
-  </style>
 </head>
 <body>
 
-  <!-- Passcode Login Gate (FR-11) -->
-  <div class="login-panel" id="login-panel">
-    <div class="login-box">
-      <div style="text-align: center;">
-        <img src="images.jpg" alt="Luka Logo" style="width: 70px; height: 70px; border-radius: 50%; margin-bottom: 12px;">
-        <h2>Luka Staff Login</h2>
-        <p style="color: #9ca3af; font-size: 13px; margin-top: 4px;">Enter staff credentials to access menu CMS</p>
+  <!-- ═══════════════════════ LOGIN ═══════════════════════ -->
+  <div class="auth-screen" id="login-panel">
+    <form class="auth-card" onsubmit="verifyLogin(event)">
+      <div class="auth-brand">
+        <img src="assets/img/mosaic-engine-mark.svg" alt="">
+        <div class="wordmark">MOSAIC ENGINE<small>HOSPITALITY MANAGEMENT</small></div>
+        <p>Sign in with your staff account</p>
       </div>
-      
-      <div class="form-group">
-        <label for="username-input" style="color: #d1d5db; display: block; margin-bottom: 6px;">Your Name / Username</label>
-        <input type="text" class="input-control" id="username-input" placeholder="e.g. Rahul" style="background:#111827; border-color:#4b5563; color:#fff; margin-bottom: 12px;" required>
+      <div class="field">
+        <label for="username-input">Username</label>
+        <div class="input-group">
+          <i class="fas fa-user"></i>
+          <input type="text" class="input" id="username-input" placeholder="e.g. rahul" autocomplete="username" autocapitalize="none" required>
+        </div>
       </div>
-
-      <div class="form-group">
-        <label for="passcode-input" style="color: #d1d5db; display: block; margin-bottom: 6px;">Staff Passcode</label>
-        <input type="password" class="input-control" id="passcode-input" placeholder="••••••••" style="background:#111827; border-color:#4b5563; color:#fff;">
+      <div class="field">
+        <label for="passcode-input">Password</label>
+        <div class="input-group">
+          <i class="fas fa-lock"></i>
+          <input type="password" class="input" id="passcode-input" placeholder="••••••••" autocomplete="current-password" required>
+        </div>
       </div>
-      
-      <button class="btn btn-primary" onclick="verifyLogin()" style="width: 100%; justify-content: center; background: var(--primary); margin-top: 8px;">
-        <i class="fas fa-sign-in-alt"></i> Access Dashboard
-      </button>
-    </div>
+      <button type="submit" class="btn btn-primary" id="btn-login"><i class="fas fa-arrow-right-to-bracket"></i> Sign in</button>
+      <div class="auth-error" id="login-error" role="alert"></div>
+    </form>
   </div>
 
-  <!-- Admin CMS Dashboard -->
-  <div class="admin-container" id="admin-dashboard" style="display: none;">
-    
-    <!-- Top Bar -->
-    <header class="admin-header">
-      <div class="logo-block">
-        <img src="images.jpg" alt="Logo" class="logo-img" style="border-color: rgba(255,255,255,0.2);">
+  <!-- ═══════════════════════ APP SHELL ═══════════════════════ -->
+  <div class="app" id="admin-dashboard" style="display:none;">
+
+    <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+      <div class="sidebar-brand">
+        <img src="assets/img/mosaic-engine-icon.svg" alt="">
         <div>
-          <h2 style="color:#fff; font-size:18px;">Downtown Luka CMS</h2>
-          <span style="font-size: 11px; color: #9ca3af; font-weight: 600;">Control Board</span>
+          <div class="name">Mosaic Engine</div>
+          <div class="sub">HMS</div>
+        </div>
+        <button class="btn btn-icon btn-nav sidebar-close" onclick="toggleNav(false)" aria-label="Close menu"><i class="fas fa-xmark"></i></button>
+      </div>
+
+      <nav class="nav">
+        <div class="nav-group" data-group="overview">
+          <div class="nav-label">Overview</div>
+          <button class="nav-link" data-tab="dashboard"><i class="fas fa-chart-line"></i> Dashboard</button>
+        </div>
+        <div class="nav-group" data-group="operations">
+          <div class="nav-label">Operations</div>
+          <button class="nav-link" data-tab="orders"><i class="fas fa-chair"></i> Table Orders <span class="nav-badge hidden" id="nav-bill-badge">0</span></button>
+          <a class="nav-link" href="kitchen.html" data-link="kitchen"><i class="fas fa-fire-burner"></i> Kitchen Display</a>
+          <button class="nav-link" data-tab="invoices"><i class="fas fa-file-invoice"></i> Sales Invoices</button>
+        </div>
+        <div class="nav-group" data-group="menu">
+          <div class="nav-label">Menu &amp; Stock</div>
+          <button class="nav-link" data-tab="items"><i class="fas fa-utensils"></i> Menu Items</button>
+          <button class="nav-link" data-tab="categories"><i class="fas fa-tags"></i> Categories</button>
+          <button class="nav-link" data-tab="inventory"><i class="fas fa-boxes-stacked"></i> BOM &amp; Inventory</button>
+        </div>
+        <div class="nav-group" data-group="admin">
+          <div class="nav-label">Administration</div>
+          <button class="nav-link" data-tab="users"><i class="fas fa-users-gear"></i> Users</button>
+          <button class="nav-link" data-tab="logs"><i class="fas fa-clock-rotate-left"></i> Audit Log</button>
+          <button class="nav-link" data-tab="settings"><i class="fas fa-gear"></i> Settings</button>
+        </div>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="avatar" id="user-avatar">?</div>
+        <div class="who">
+          <div class="u" id="user-name">—</div>
+          <div class="r" id="user-role">—</div>
         </div>
       </div>
-      <div style="display: flex; gap: 12px; align-items: center;">
-        <a href="index.html" class="btn btn-secondary" style="font-size:13px;"><i class="fas fa-eye"></i> View Live Menu</a>
-        <button class="btn btn-danger" onclick="logoutAdmin()" style="font-size:13px;"><i class="fas fa-sign-out-alt"></i> Logout</button>
-      </div>
-    </header>
+    </aside>
+    <div class="backdrop" onclick="toggleNav(false)"></div>
 
-    <div class="admin-main">
-      <!-- Sidebar Control Navigation -->
-      <aside class="admin-sidebar">
-        <nav style="display: flex; flex-direction: column; gap: 8px;">
-          <button class="btn btn-primary" id="nav-btn-dashboard" onclick="switchAdminTab('dashboard')" style="width: 100%; justify-content: flex-start; background: transparent; color: #d1d5db;">
-            <i class="fas fa-chart-line"></i> Dashboard
-          </button>
-          <button class="btn btn-primary active" id="nav-btn-items" onclick="switchAdminTab('items')" style="width: 100%; justify-content: flex-start; background: transparent; color: #d1d5db;">
-            <i class="fas fa-hamburger"></i> Manage Menu Items
-          </button>
-          <button class="btn btn-primary" id="nav-btn-orders" onclick="switchAdminTab('orders')" style="width: 100%; justify-content: flex-start; background: transparent; color: #d1d5db;">
-            <i class="fas fa-clipboard-list"></i> Table Orders
-          </button>
-          <button class="btn btn-primary" id="nav-btn-invoices" onclick="switchAdminTab('invoices')" style="width: 100%; justify-content: flex-start; background: transparent; color: #d1d5db;">
-            <i class="fas fa-file-invoice-dollar"></i> Sales Invoices
-          </button>
-          <button class="btn btn-primary" id="nav-btn-categories" onclick="switchAdminTab('categories')" style="width: 100%; justify-content: flex-start; background: transparent; color: #d1d5db;">
-            <i class="fas fa-tags"></i> Manage Categories
-          </button>
-          <button class="btn btn-primary" id="nav-btn-logs" onclick="switchAdminTab('logs')" style="width: 100%; justify-content: flex-start; background: transparent; color: #d1d5db;">
-            <i class="fas fa-history"></i> Audit Logs
-          </button>
-          <button class="btn btn-primary" id="nav-btn-users" onclick="switchAdminTab('users')" style="width: 100%; justify-content: flex-start; background: transparent; color: #d1d5db;">
-            <i class="fas fa-users-cog"></i> Manage Users
-          </button>
-          <a href="kitchen.html" id="nav-btn-kitchen" class="btn btn-primary" style="width: 100%; justify-content: flex-start; background: rgba(239,68,68,0.1); color: #f87171; border:1px solid rgba(239,68,68,0.25); text-decoration:none;">
-            <i class="fas fa-fire-flame-curved"></i> Kitchen Display
-          </a>
-        </nav>
-      </aside>
-
-      <!-- Main Workspace Panel -->
-      <main class="admin-content">
-        
-        <!-- SECTION 1: ITEMS MANAGEMENT -->
-        <section id="sec-items" class="tab-section active">
-          
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2>Menu Catalog Items</h2>
-            <button class="btn btn-primary" onclick="toggleItemForm()" id="btn-add-item-toggle">
-              <i class="fas fa-plus"></i> Add New Menu Item
-            </button>
-          </div>
-
-          <!-- Item Form Drawer (Hidden by default) -->
-          <div class="form-box" id="item-form-box" style="display: none;">
-            <h3 id="form-item-title" style="margin-bottom: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">Add New Menu Item</h3>
-            <form id="item-crud-form" onsubmit="saveItem(event)">
-              <input type="hidden" id="edit-item-id">
-              
-              <div class="control-grid" style="grid-template-columns: 2fr 1fr; gap: 16px;">
-                <div class="control-item">
-                  <label for="item-name-input">Item Name *</label>
-                  <input type="text" class="input-control" id="item-name-input" required placeholder="e.g. John Wick">
-                </div>
-                <div class="control-item">
-                  <label for="item-category-select">Category *</label>
-                  <select class="input-control" id="item-category-select" required>
-                    <!-- Populated dynamically -->
-                  </select>
-                </div>
-              </div>
-
-              <div class="form-group" style="margin-top: 16px;">
-                <label for="item-desc-input">Description / Subtitle (Ingredients list)</label>
-                <textarea class="input-control" id="item-desc-input" placeholder="e.g. Gin, Basil, Orange juice..." style="min-height: 80px;"></textarea>
-              </div>
-
-              <div class="control-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 16px;">
-                <div class="control-item">
-                  <label>Diet Tags</label>
-                  <div style="display: flex; gap: 12px; margin-top: 8px; flex-wrap: wrap;">
-                    <label style="font-weight:normal; cursor:pointer;"><input type="checkbox" id="tag-veg-check"> Veg</label>
-                    <label style="font-weight:normal; cursor:pointer;"><input type="checkbox" id="tag-nonveg-check"> Non-Veg</label>
-                    <label style="font-weight:normal; cursor:pointer;"><input type="checkbox" id="tag-spicy-check"> Spicy</label>
-                    <label style="font-weight:normal; cursor:pointer;"><input type="checkbox" id="tag-sig-check"> Signature</label>
-                    <label style="font-weight:normal; cursor:pointer;"><input type="checkbox" id="tag-best-check"> Bestseller</label>
-                  </div>
-                </div>
-                <div class="control-item">
-                  <label for="item-avail-select">Availability *</label>
-                  <select class="input-control" id="item-avail-select" required>
-                    <option value="Available">Available (In Stock)</option>
-                    <option value="86'd">86'd (Out of Stock)</option>
-                    <option value="Seasonal">Seasonal</option>
-                  </select>
-                </div>
-                <div class="control-item">
-                  <label for="item-status-select">Status</label>
-                  <select class="input-control" id="item-status-select">
-                    <option value="Published">Published</option>
-                    <option value="Draft">Draft</option>
-                  </select>
-                </div>
-                <div class="control-item">
-                  <label for="item-order-input">Display Order</label>
-                  <input type="number" class="input-control" id="item-order-input" value="1" min="1">
-                </div>
-              </div>
-
-              <!-- Media Uploader Dragzone -->
-              <div class="form-group" style="margin-top: 20px;">
-                <label>Media Upload (Image or Short MP4 Video)</label>
-                <div class="drag-media-zone" id="media-drag-zone">
-                  <i class="fas fa-cloud-upload-alt" style="font-size: 32px; color: var(--text-light); margin-bottom: 8px;"></i>
-                  <p style="font-size: 13px; color: var(--text-muted);">Drag and drop media files here, or click to upload</p>
-                  <input type="file" id="media-file-input" accept="image/*, video/mp4" style="display: none;">
-                </div>
-                <div class="media-preview-container" id="media-previews">
-                  <!-- Thumbnails populated here -->
-                </div>
-              </div>
-
-              <!-- Interactive Pricing Grid Builder (FR-4 & FR-13) -->
-              <div class="form-box" style="margin-top: 20px; background: #f9fafb;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                  <h4 style="font-size: 14px;">Price Variants (Peg size, portions, beer dispenser sizes)</h4>
-                  <button type="button" class="btn btn-secondary" style="font-size: 12px; padding: 4px 8px;" onclick="addPriceVariantRow()">
-                    <i class="fas fa-plus"></i> Add Price Row
-                  </button>
-                </div>
-                <div id="price-variants-container">
-                  <!-- Pricing rows populated here -->
-                </div>
-              </div>
-
-              <div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px;">
-                <button type="button" class="btn btn-secondary" onclick="toggleItemForm()">Cancel</button>
-                <button type="submit" class="btn btn-primary">Save Menu Item</button>
-              </div>
-            </form>
-          </div>
-
-          <!-- Items Table View -->
-          <div class="form-box">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
-              <h3 style="font-size: 16px;">Current Catalog Items</h3>
-              <div style="display: flex; gap: 8px;">
-                <select class="input-control" id="table-filter-cat" onchange="renderAdminItems()" style="width: auto;">
-                  <option value="all">All Categories</option>
-                  <!-- Populated dynamically -->
-                </select>
-              </div>
-            </div>
-            
-            <div style="overflow-x: auto;">
-              <table class="admin-table">
-                <thead>
-                  <tr>
-                    <th>Item Name</th>
-                    <th>Category</th>
-                    <th>Price Options</th>
-                    <th>Availability</th>
-                    <th>Status</th>
-                    <th style="text-align: right;">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="admin-items-tbody">
-                  <!-- Populated dynamically -->
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-        </section>
-
-        <!-- SECTION 2: CATEGORIES MANAGEMENT -->
-        <section id="sec-categories" class="tab-section">
-          
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2>Menu Categories</h2>
-          </div>
-
-          <div class="control-grid" style="grid-template-columns: 1fr 2fr; gap: 24px; align-items: flex-start;">
-            
-            <!-- Category Edit/Add Form -->
-            <div class="form-box">
-              <h3 id="form-category-title" style="margin-bottom: 16px;">Add New Category</h3>
-              <form id="category-crud-form" onsubmit="saveCategory(event)">
-                <input type="hidden" id="edit-cat-id">
-                
-                <div class="form-group">
-                  <label for="cat-name-input">Category Name *</label>
-                  <input type="text" class="input-control" id="cat-name-input" required placeholder="e.g. Sushi">
-                </div>
-
-                <div class="form-group">
-                  <label for="cat-section-select">Menu Section *</label>
-                  <select class="input-control" id="cat-section-select" required>
-                    <option value="food">Food Menu</option>
-                    <option value="drinks">Drinks & Bar Menu</option>
-                  </select>
-                </div>
-
-                <div class="form-group">
-                  <label for="cat-order-input">Display Order</label>
-                  <input type="number" class="input-control" id="cat-order-input" value="1" min="1">
-                </div>
-
-                <div class="form-group">
-                  <label style="cursor: pointer; font-weight: normal;">
-                    <input type="checkbox" id="cat-visible-check" checked> Visible to Public
-                  </label>
-                </div>
-
-                <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;">
-                  <button type="button" class="btn btn-secondary" onclick="resetCategoryForm()">Clear</button>
-                  <button type="submit" class="btn btn-primary">Save Category</button>
-                </div>
-              </form>
-            </div>
-
-            <!-- Categories Table List -->
-            <div class="form-box">
-              <h3 style="font-size: 16px; margin-bottom: 16px;">Current Configured Categories</h3>
-              <div style="overflow-x: auto;">
-                <table class="admin-table">
-                  <thead>
-                    <tr>
-                      <th>Category Name</th>
-                      <th>Section</th>
-                      <th>Display Order</th>
-                      <th>Visible</th>
-                      <th style="text-align: right;">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="admin-categories-tbody">
-                    <!-- Populated dynamically -->
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-          </div>
-
-        </section>
-
-        <!-- SECTION 3: AUDIT LOGS VIEW -->
-        <section id="sec-logs" class="tab-section">
-          
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2>CMS Audit Logs & History</h2>
-            <div style="display: flex; gap: 8px;">
-              <input type="text" class="input-control" id="log-search-box" placeholder="Filter by User or Action..." oninput="renderAuditLogs()" style="width: 250px;">
-              <button class="btn btn-secondary" onclick="loadAuditLogs()"><i class="fas fa-sync"></i> Refresh</button>
-            </div>
-          </div>
-
-          <div class="form-box">
-            <div style="overflow-x: auto;">
-              <table class="admin-table">
-                <thead>
-                  <tr>
-                    <th style="width: 220px;">Timestamp (UTC)</th>
-                    <th style="width: 160px;">User / Editor</th>
-                    <th>Action Performed</th>
-                  </tr>
-                </thead>
-                <tbody id="admin-logs-tbody">
-                  <!-- Populated dynamically -->
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-        </section>
-
-        <!-- SECTION 5: ACTIVE TABLE ORDERS DASHBOARD -->
-        <section id="sec-table-orders" class="tab-section">
-          
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2>Live Table Orders Dashboard</h2>
-            <button class="btn btn-secondary" onclick="loadAdminTableOrders()"><i class="fas fa-sync"></i> Refresh Orders</button>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 280px 1fr; gap: 20px; align-items: start;">
-            
-            <!-- Table selection sidebar -->
-            <div class="form-box" style="padding: 16px;">
-              <h3 style="font-size: 15px; margin-bottom: 16px;"><i class="fas fa-th" style="color:var(--primary); margin-right:6px;"></i>Select Table</h3>
-              <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;" id="admin-tables-grid">
-                <!-- Grid of tables generated dynamically -->
-              </div>
-            </div>
-
-            <!-- Active orders detail panel -->
-            <div class="form-box" id="admin-table-detail-pane" style="min-height: 400px; display: flex; flex-direction: column;">
-              <div style="text-align: center; color: var(--text-muted); margin: auto; padding: 40px;" id="table-detail-empty-state">
-                <i class="fas fa-utensils" style="font-size: 50px; margin-bottom: 16px; color: var(--primary); opacity: 0.25;"></i>
-                <p style="font-size:14px;">Select a table in the left grid to view ordered rounds and manage live preparation tracking.</p>
-              </div>
-              
-              <div id="table-detail-content" style="display: none; flex-direction: column; height: 100%;">
-                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 20px;">
-                  <h3 id="detail-table-title" style="font-size: 18px; margin: 0; color: #fff;">Table X</h3>
-                  <button class="btn btn-primary" id="btn-generate-bill" onclick="checkoutTable()" style="background:var(--primary); font-size:13px; font-weight:600; cursor:pointer;">
-                    <i class="fas fa-file-invoice-dollar" style="margin-right:6px;"></i> Generate Bill / Checkout
-                  </button>
-                </div>
-
-                <div id="detail-rounds-container" style="flex: 1; display:flex; flex-direction:column; gap:16px;">
-                  <!-- Filled dynamically -->
-                </div>
-              </div>
-            </div>
-
-          </div>
-
-        </section>
-
-        <!-- Invoice Receipt Settle Modal -->
-        <div class="modal" id="bill-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1100; align-items: center; justify-content: center;">
-          <div class="form-box" style="width: 440px; max-width: 95%; background: #1e1b18; color: #fff; padding: 24px; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-            <div style="text-align: center; border-bottom: 2px dashed rgba(255,255,255,0.15); padding-bottom: 16px; margin-bottom: 16px;">
-              <img src="images.jpg" alt="Luka Logo" style="width: 60px; height: 60px; border-radius: 50%; margin-bottom: 8px; border: 1px solid rgba(255,255,255,0.2);">
-              <h2 style="font-family:'Outfit', sans-serif; font-size: 22px; color:var(--primary); margin:0;">Downtown Luka</h2>
-              <span style="font-size: 11px; color:#9ca3af; font-weight:600;">Est. 2011 • Cyberhub, Sector 24, Gurugram</span>
-            </div>
-            
-            <div style="font-size: 12px; line-height: 1.6; margin-bottom: 16px; color:#d1d5db;" id="bill-meta-info">
-              <!-- Table info populated dynamically -->
-            </div>
-            
-            <div style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px; margin-bottom: 12px; max-height:180px; overflow-y:auto;" id="bill-items-list">
-              <!-- Items populated dynamically -->
-            </div>
-            
-            <div style="font-size: 13px; display: flex; flex-direction: column; gap: 6px; border-bottom: 2px dashed rgba(255,255,255,0.15); padding-bottom: 16px; margin-bottom: 16px;">
-              <div style="display:flex; justify-content:space-between;"><span>Subtotal</span><span id="bill-subtotal">₹0</span></div>
-              <div style="display:flex; justify-content:space-between; color:#a1a1aa;"><span>Service Charge (10%)</span><span id="bill-service-charge">₹0</span></div>
-              <div style="display:flex; justify-content:space-between; color:#a1a1aa;"><span>Government Taxes (5%)</span><span id="bill-tax">₹0</span></div>
-              <div style="display:flex; justify-content:space-between; font-size:16px; font-weight:700; color: var(--primary); margin-top: 4px;">
-                <span>GRAND TOTAL</span>
-                <span id="bill-grand-total">₹0</span>
-              </div>
-            </div>
-
-            <div style="text-align: center; color: #a1a1aa; font-size: 11px; margin-bottom: 20px;">
-              <strong>Thank you for dining with us!</strong><br>
-              10% Service Charge & Government Taxes applied.
-            </div>
-            
-            <div style="display: flex; gap: 8px; justify-content: stretch; align-items: center;" id="bill-actions-footer">
-              <button class="btn btn-secondary" onclick="closeBillModal()" style="flex:1; justify-content:center; padding: 10px 0;"><i class="fas fa-times"></i> Close</button>
-              <button class="btn btn-secondary" onclick="printInvoice()" style="padding: 10px 14px;" title="Print Receipt"><i class="fas fa-print"></i> Print</button>
-              <button class="btn btn-secondary" onclick="downloadInvoicePDF()" style="padding: 10px 14px;" title="Download PDF Receipt"><i class="fas fa-file-pdf"></i> Save</button>
-              <button class="btn btn-primary" onclick="confirmBillCheckout()" style="flex:1.5; justify-content:center; background:var(--primary); padding: 10px 0; font-weight:600;" id="btn-settle-action">
-                <i class="fas fa-check" style="margin-right:6px;"></i> Settle & Reset Table
-              </button>
-            </div>
-          </div>
+    <div class="main">
+      <header class="topbar">
+        <button class="btn btn-icon btn-ghost menu-toggle" onclick="toggleNav(true)" aria-label="Open menu"><i class="fas fa-bars"></i></button>
+        <div class="topbar-title" id="topbar-title">Dashboard</div>
+        <div class="topbar-actions">
+          <a href="index.html" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" title="Open the customer menu"><i class="fas fa-arrow-up-right-from-square"></i><span class="btn-label">Live Menu</span></a>
+          <button class="btn btn-secondary btn-sm" onclick="logoutAdmin()" title="Sign out"><i class="fas fa-right-from-bracket"></i><span class="btn-label">Sign out</span></button>
         </div>
+      </header>
 
-        <style>
-          /* Layout fix for billing modal alignment */
-          #bill-modal.active-modal {
-            display: flex !important;
-          }
-          .bill-item-line {
-            display: flex;
-            justify-content: space-between;
-            font-size: 12px;
-            margin-bottom: 6px;
-          }
-          @media print {
-            body * {
-              visibility: hidden;
-            }
-            #bill-modal, #bill-modal * {
-              visibility: visible;
-            }
-            #bill-modal {
-              position: absolute;
-              left: 0;
-              top: 0;
-              width: 100%;
-              background: white !important;
-              color: black !important;
-            }
-            #bill-modal .form-box {
-              background: white !important;
-              color: black !important;
-              border: none !important;
-              box-shadow: none !important;
-              width: 100% !important;
-              max-width: 100% !important;
-              margin: 0 !important;
-              padding: 0 !important;
-            }
-            #bill-meta-info, #bill-items-list, #bill-grand-total {
-              color: black !important;
-            }
-            #bill-actions-footer {
-              display: none !important;
-            }
-          }
-        </style>
+      <main class="content">
 
-        <!-- SECTION 4: USER PROFILES DASHBOARD (Admin Only) -->
-        <section id="sec-users" class="tab-section">
-          
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2>User Credentials & Roles</h2>
-            <button class="btn btn-primary" onclick="toggleUserForm()" id="btn-add-user-toggle">
-              <i class="fas fa-user-plus"></i> Add New User Profile
-            </button>
-          </div>
-
-          <!-- Add/Edit User Form (Hidden by default) -->
-          <div class="form-box" id="user-form-box" style="display: none; margin-bottom: 20px;">
-            <h3 id="form-user-title" style="margin-bottom: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">Create New User Profile</h3>
-            <form id="user-crud-form" onsubmit="saveUserProfile(event)">
-              <input type="hidden" id="edit-user-original-name">
-              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
-                
-                <div class="form-group">
-                  <label for="user-name-input">Username *</label>
-                  <input type="text" class="input-control" id="user-name-input" placeholder="e.g. neha" required>
-                </div>
-
-                <div class="form-group">
-                  <label for="user-password-input">Password *</label>
-                  <input type="password" class="input-control" id="user-password-input" placeholder="••••••••" required>
-                </div>
-
-                <div class="form-group">
-                  <label for="user-role-select">Access Role *</label>
-                  <select class="input-control" id="user-role-select" required>
-                    <option value="Waiter">Waiter</option>
-                    <option value="Receptionist">Receptionist</option>
-                    <option value="Kitchen">Kitchen Staff</option>
-                    <option value="Owner">Owner</option>
-                    <option value="Admin">Admin</option>
-                  </select>
-                </div>
-
-              </div>
-
-              <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;">
-                <button type="button" class="btn btn-secondary" onclick="toggleUserForm()">Cancel</button>
-                <button type="submit" class="btn btn-primary" id="btn-save-user">Create Profile</button>
-              </div>
-            </form>
-          </div>
-
-          <!-- Users Table List -->
-          <div class="form-box">
-            <h3 style="font-size: 16px; margin-bottom: 16px;">Configured Staff Accounts</h3>
-            <div style="overflow-x: auto;">
-              <table class="admin-table">
-                <thead>
-                  <tr>
-                    <th>Username</th>
-                    <th>Role</th>
-                    <th>Password (Plaintext Reference)</th>
-                    <th style="text-align: right; width: 220px;">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="admin-users-tbody">
-                  <!-- Populated dynamically -->
-                </tbody>
-              </table>
+        <!-- ─────────── DASHBOARD ─────────── -->
+        <section class="page" id="sec-dashboard">
+          <div class="page-header">
+            <div>
+              <h2>Sales Dashboard</h2>
+              <p>Revenue, best sellers and busy hours across all tables.</p>
             </div>
-          </div>
-
-        </section>
-
-        <!-- SECTION 6: HISTORICAL SALES INVOICES (Admin / Owner Only) -->
-        <section id="sec-invoices" class="tab-section">
-          
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2>Historical Sales Invoices</h2>
-            <div style="display: flex; gap: 8px; align-items: center;">
-              <input type="text" id="invoice-search-input" placeholder="Search by Table or Invoice ID..." class="input-control" style="width:250px; background:#111827; border-color:#4b5563; color:#fff;" oninput="filterHistoricalInvoices()">
-              <button class="btn btn-secondary" onclick="loadHistoricalInvoices()"><i class="fas fa-sync"></i> Refresh</button>
-            </div>
-          </div>
-
-          <div class="form-box">
-            <div style="overflow-x: auto;">
-              <table class="admin-table">
-                <thead>
-                  <tr>
-                    <th>Invoice ID</th>
-                    <th>Date / Time (UTC)</th>
-                    <th>Table Number</th>
-                    <th>Subtotal</th>
-                    <th>Svc Charge (10%)</th>
-                    <th>Tax (5%)</th>
-                    <th>Grand Total</th>
-                    <th style="text-align: right; width: 140px;">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="admin-invoices-tbody">
-                  <!-- Populated dynamically -->
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-        </section>
-
-        <!-- SECTION 7: ANALYTICS DASHBOARD (Admin / Owner Only) -->
-        <section id="sec-dashboard" class="tab-section">
-
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
-            <h2><i class="fas fa-chart-line" style="color:#f59e0b;margin-right:8px;"></i>Sales Analytics Dashboard</h2>
-            <div style="display: flex; gap: 8px;">
-              <button class="btn btn-secondary" onclick="loadDashboard()"><i class="fas fa-sync"></i> Refresh</button>
+            <div class="page-actions">
+              <button class="btn btn-secondary" onclick="loadDashboard()"><i class="fas fa-rotate"></i> Refresh</button>
               <button class="btn btn-primary" onclick="exportDashboardPDF()"><i class="fas fa-file-pdf"></i> Export PDF</button>
             </div>
           </div>
 
-          <!-- Summary Cards -->
-          <div id="db-summary-cards" class="db-summary-grid"></div>
+          <div class="stats-grid" id="db-summary-cards"></div>
 
-          <!-- Charts Row 1: Revenue + Category -->
-          <div class="db-charts-grid">
-            <div class="db-chart-box full-width">
-              <div class="db-chart-title"><i class="fas fa-chart-bar"></i> 30-Day Daily Revenue</div>
-              <div class="db-chart-wrap"><canvas id="chart-revenue"></canvas></div>
+          <div class="charts-grid">
+            <div class="card wide">
+              <div class="card-header"><h3><i class="fas fa-chart-column"></i> Daily revenue <span class="sub">· last 30 days</span></h3></div>
+              <div class="card-body"><div class="chart-wrap"><canvas id="chart-revenue"></canvas></div></div>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3><i class="fas fa-chart-pie"></i> Revenue by category</h3></div>
+              <div class="card-body"><div class="chart-wrap tall"><canvas id="chart-category"></canvas></div></div>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3><i class="fas fa-wallet"></i> Payment methods <span class="sub">· last 30 days</span></h3></div>
+              <div class="card-body"><div class="chart-wrap tall"><canvas id="chart-payments"></canvas></div></div>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3><i class="fas fa-clock"></i> Peak hours <span class="sub">· bills per hour</span></h3></div>
+              <div class="card-body"><div class="chart-wrap tall"><canvas id="chart-hourly"></canvas></div></div>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3><i class="fas fa-trophy"></i> Top selling items</h3></div>
+              <div class="table-wrap cards">
+                <table class="table responsive">
+                  <thead><tr><th>#</th><th>Item</th><th>Qty sold</th><th>Revenue</th></tr></thead>
+                  <tbody id="db-items-tbody"><tr><td colspan="4" class="empty-cell">Loading…</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── TABLE ORDERS ─────────── -->
+        <section class="page" id="sec-table-orders">
+          <div class="page-header">
+            <div>
+              <h2>Table Orders</h2>
+              <p>Live orders from table QR codes. Updates every 15 seconds.</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-secondary" onclick="loadAdminTableOrders()"><i class="fas fa-rotate"></i> Refresh</button>
             </div>
           </div>
 
-          <!-- Charts Row 2: Category + Peak Hours -->
-          <div class="db-charts-grid">
-            <div class="db-chart-box">
-              <div class="db-chart-title"><i class="fas fa-chart-pie"></i> Revenue by Category</div>
-              <div class="db-chart-wrap tall"><canvas id="chart-category"></canvas></div>
+          <div class="orders-layout">
+            <div class="card">
+              <div class="card-header">
+                <h3><i class="fas fa-table-cells"></i> Tables</h3>
+                <div class="legend">
+                  <span><i class="dot" style="background:#fcd34d"></i>Dining</span>
+                  <span><i class="dot" style="background:#c4b5fd"></i>Bill asked</span>
+                </div>
+              </div>
+              <div class="card-body"><div class="tables-grid" id="admin-tables-grid"></div></div>
             </div>
-            <div class="db-chart-box">
-              <div class="db-chart-title"><i class="fas fa-clock"></i> Peak Hours (Orders)</div>
-              <div class="db-chart-wrap tall"><canvas id="chart-hourly"></canvas></div>
+
+            <div class="card" id="admin-table-detail-pane">
+              <div id="table-detail-empty-state" class="empty">
+                <i class="fas fa-hand-pointer"></i>
+                <h4>Select a table</h4>
+                <p>Pick a table to see its orders, update kitchen status and settle the bill.</p>
+              </div>
+              <div id="table-detail-content" class="hidden">
+                <div class="card-header">
+                  <div>
+                    <h3 id="detail-table-title" style="font-size:17px;">Table</h3>
+                    <div class="guest-line" id="detail-guest-line"></div>
+                  </div>
+                  <button class="btn btn-primary" id="btn-generate-bill" onclick="checkoutTable()"><i class="fas fa-receipt"></i> Bill &amp; Payment</button>
+                </div>
+                <div class="card-body">
+                  <div id="detail-rounds-container"></div>
+                  <div class="round-total"><span>Running total (before charges)</span><span id="detail-running-total">₹0</span></div>
+                </div>
+              </div>
             </div>
           </div>
+        </section>
 
-          <!-- Top Selling Items -->
-          <div class="form-box" style="background:#1f2937; border-color:rgba(255,255,255,0.06);">
-            <h3 style="font-size:15px; color:#f3f4f6; margin-bottom:16px;"><i class="fas fa-trophy" style="color:#f59e0b;margin-right:8px;"></i>Top Selling Menu Items</h3>
-            <div style="overflow-x:auto;">
-              <table class="admin-table">
+        <!-- ─────────── INVOICES ─────────── -->
+        <section class="page" id="sec-invoices">
+          <div class="page-header">
+            <div>
+              <h2>Sales Invoices</h2>
+              <p>Every settled bill with how it was paid.</p>
+            </div>
+            <div class="page-actions">
+              <div class="input-group">
+                <i class="fas fa-magnifying-glass"></i>
+                <input type="search" id="invoice-search-input" class="input" placeholder="Invoice ID, table, guest or method…" oninput="filterHistoricalInvoices()">
+              </div>
+              <button class="btn btn-secondary" onclick="loadHistoricalInvoices()"><i class="fas fa-rotate"></i> Refresh</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="table-wrap cards">
+              <table class="table responsive">
                 <thead>
-                  <tr>
-                    <th style="width:60px;">Rank</th>
-                    <th>Item Name</th>
-                    <th>Qty Sold</th>
-                    <th>Revenue</th>
-                  </tr>
+                  <tr><th>Invoice</th><th>Date</th><th>Table</th><th>Guest</th><th>Subtotal</th><th>Charges</th><th>Total</th><th>Payment</th><th class="text-right">Actions</th></tr>
                 </thead>
-                <tbody id="db-items-tbody">
-                  <tr><td colspan="4" style="text-align:center;color:#6b7280;padding:20px;">Loading...</td></tr>
+                <tbody id="admin-invoices-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── MENU ITEMS ─────────── -->
+        <section class="page" id="sec-items">
+          <div class="page-header">
+            <div>
+              <h2>Menu Items</h2>
+              <p>Dishes and drinks shown on the customer menu.</p>
+            </div>
+            <div class="page-actions">
+              <div class="input-group">
+                <i class="fas fa-magnifying-glass"></i>
+                <input type="search" class="input" id="item-search" placeholder="Search items…" oninput="renderAdminItems()">
+              </div>
+              <select class="select" id="table-filter-cat" onchange="renderAdminItems()" style="width:auto;">
+                <option value="all">All categories</option>
+              </select>
+              <button class="btn btn-primary" onclick="openItemForm()" id="btn-add-item-toggle"><i class="fas fa-plus"></i> Add item</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-wrap cards">
+              <table class="table responsive">
+                <thead>
+                  <tr><th>Item</th><th>Category</th><th>Prices</th><th>Availability</th><th>Status</th><th class="text-right">Actions</th></tr>
+                </thead>
+                <tbody id="admin-items-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── CATEGORIES ─────────── -->
+        <section class="page" id="sec-categories">
+          <div class="page-header">
+            <div>
+              <h2>Categories</h2>
+              <p>Group menu items into the Food and Drinks sections.</p>
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-header"><h3 id="form-category-title"><i class="fas fa-pen"></i> Add category</h3></div>
+              <form id="category-crud-form" onsubmit="saveCategory(event)">
+                <div class="card-body">
+                  <input type="hidden" id="edit-cat-id">
+                  <div class="form-grid" style="grid-template-columns:1fr;">
+                    <div class="field">
+                      <label for="cat-name-input">Name *</label>
+                      <input type="text" class="input" id="cat-name-input" required placeholder="e.g. Sushi">
+                    </div>
+                    <div class="field">
+                      <label for="cat-section-select">Menu section *</label>
+                      <select class="select" id="cat-section-select" required>
+                        <option value="food">Food</option>
+                        <option value="drinks">Drinks &amp; Bar</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label for="cat-order-input">Display order</label>
+                      <input type="number" class="input" id="cat-order-input" value="1" min="1">
+                    </div>
+                    <label class="check" style="align-self:flex-start;"><input type="checkbox" id="cat-visible-check" checked> Visible to customers</label>
+                  </div>
+                </div>
+                <div class="card-footer">
+                  <button type="button" class="btn btn-secondary" onclick="resetCategoryForm()">Clear</button>
+                  <button type="submit" class="btn btn-primary">Save category</button>
+                </div>
+              </form>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3><i class="fas fa-list"></i> All categories</h3></div>
+              <div class="table-wrap cards">
+                <table class="table responsive">
+                  <thead><tr><th>Name</th><th>Section</th><th>Order</th><th>Items</th><th>Visible</th><th class="text-right">Actions</th></tr></thead>
+                  <tbody id="admin-categories-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── BOM & INVENTORY ─────────── -->
+        <section class="page" id="sec-inventory">
+          <div class="page-header">
+            <div>
+              <h2>BOM &amp; Inventory</h2>
+              <p>Raw materials, recipes (bill of materials) and automatic stock deduction.</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-secondary" onclick="loadInventory()"><i class="fas fa-rotate"></i> Refresh</button>
+              <button class="btn btn-primary" id="btn-add-material" onclick="openMaterialForm()"><i class="fas fa-plus"></i> Add material</button>
+            </div>
+          </div>
+          <div class="notice" id="bom-mode-notice"></div>
+
+          <div class="tabs" role="tablist">
+            <button class="tab active" data-subtab="materials" onclick="switchInventoryTab('materials')"><i class="fas fa-box"></i> Raw materials</button>
+            <button class="tab" data-subtab="recipes" onclick="switchInventoryTab('recipes')"><i class="fas fa-diagram-project"></i> Recipes (BOM)</button>
+            <button class="tab" data-subtab="ledger" onclick="switchInventoryTab('ledger')"><i class="fas fa-book"></i> Stock ledger</button>
+          </div>
+
+          <div class="subpage active" id="inv-materials">
+            <div class="card">
+              <div class="table-wrap cards">
+                <table class="table responsive">
+                  <thead><tr><th>Material</th><th>In stock</th><th>Reorder at</th><th>Cost / unit</th><th>Stock value</th><th class="text-right">Actions</th></tr></thead>
+                  <tbody id="inv-materials-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="subpage" id="inv-recipes">
+            <div class="grid-2">
+              <div class="card">
+                <div class="card-header"><h3><i class="fas fa-utensils"></i> Choose a menu item</h3></div>
+                <div class="card-body">
+                  <div class="form-grid" style="grid-template-columns:1fr;">
+                    <div class="field">
+                      <label for="bom-item-select">Menu item</label>
+                      <select class="select" id="bom-item-select" onchange="onBomItemChange()"></select>
+                    </div>
+                    <div class="field">
+                      <label for="bom-variant-select">Size / variant</label>
+                      <select class="select" id="bom-variant-select" onchange="renderBomEditor()"></select>
+                    </div>
+                  </div>
+                  <p class="muted" style="font-size:12.5px;margin-top:12px;">Each size can use different quantities, for example a beer mug uses 0.5 L and a pitcher uses 1.5 L.</p>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-header">
+                  <h3><i class="fas fa-flask"></i> <span id="bom-editor-title">Recipe</span></h3>
+                  <button class="btn btn-secondary btn-sm" type="button" onclick="addIngredientRow()"><i class="fas fa-plus"></i> Ingredient</button>
+                </div>
+                <div class="card-body">
+                  <div id="bom-ingredients"></div>
+                  <div class="cost-box" id="bom-cost-box"></div>
+                </div>
+                <div class="card-footer">
+                  <button class="btn btn-danger-soft" type="button" onclick="clearRecipe()"><i class="fas fa-eraser"></i> Clear recipe</button>
+                  <button class="btn btn-primary" type="button" onclick="saveRecipe()"><i class="fas fa-floppy-disk"></i> Save recipe</button>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3><i class="fas fa-list-check"></i> Items with recipes</h3></div>
+              <div class="table-wrap cards">
+                <table class="table responsive">
+                  <thead><tr><th>Item</th><th>Size</th><th>Ingredients</th><th>Food cost</th><th>Price</th><th>Margin</th><th class="text-right"></th></tr></thead>
+                  <tbody id="inv-recipes-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="subpage" id="inv-ledger">
+            <div class="card">
+              <div class="table-wrap cards">
+                <table class="table responsive">
+                  <thead><tr><th>When</th><th>Material</th><th>Change</th><th>Balance</th><th>Reason</th><th>By</th></tr></thead>
+                  <tbody id="inv-ledger-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── USERS ─────────── -->
+        <section class="page" id="sec-users">
+          <div class="page-header">
+            <div>
+              <h2>Users</h2>
+              <p>Staff accounts and what each role can access.</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="openUserForm()" id="btn-add-user-toggle"><i class="fas fa-user-plus"></i> Add user</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="table-wrap cards">
+              <table class="table responsive">
+                <thead><tr><th>Username</th><th>Role</th><th>Password</th><th class="text-right">Actions</th></tr></thead>
+                <tbody id="admin-users-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3><i class="fas fa-shield-halved"></i> Role access</h3></div>
+            <div class="table-wrap cards">
+              <table class="table responsive">
+                <thead><tr><th>Role</th><th>Can access</th></tr></thead>
+                <tbody>
+                  <tr><td data-label="Role" class="strong">Admin</td><td data-label="Access">Everything, including Users, Audit Log and Settings</td></tr>
+                  <tr><td data-label="Role" class="strong">Owner</td><td data-label="Access">Everything except Users and Settings</td></tr>
+                  <tr><td data-label="Role" class="strong">Receptionist</td><td data-label="Access">Table orders, billing &amp; payments, invoices, menu items, stock-in</td></tr>
+                  <tr><td data-label="Role" class="strong">Waiter</td><td data-label="Access">Table orders (no billing), menu view</td></tr>
+                  <tr><td data-label="Role" class="strong">Kitchen</td><td data-label="Access">Kitchen Display only</td></tr>
                 </tbody>
               </table>
             </div>
           </div>
+        </section>
 
+        <!-- ─────────── AUDIT LOG ─────────── -->
+        <section class="page" id="sec-logs">
+          <div class="page-header">
+            <div>
+              <h2>Audit Log</h2>
+              <p>Who did what, and when. Times shown in your local time.</p>
+            </div>
+            <div class="page-actions">
+              <div class="input-group">
+                <i class="fas fa-magnifying-glass"></i>
+                <input type="search" class="input" id="log-search-box" placeholder="Filter by user or action…" oninput="renderAuditLogs()">
+              </div>
+              <button class="btn btn-secondary" onclick="loadAuditLogs()"><i class="fas fa-rotate"></i> Refresh</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="table-wrap cards">
+              <table class="table responsive">
+                <thead><tr><th style="width:190px;">When</th><th style="width:160px;">User</th><th>Action</th></tr></thead>
+                <tbody id="admin-logs-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── SETTINGS (Admin only) ─────────── -->
+        <section class="page" id="sec-settings">
+          <div class="page-header">
+            <div>
+              <h2>Settings</h2>
+              <p>Only Admins can see and change these.</p>
+            </div>
+          </div>
+          <form id="settings-form" onsubmit="saveSettings(event)">
+            <div class="grid-2-even">
+              <div class="card">
+                <div class="card-header"><h3><i class="fas fa-store"></i> Business details</h3><span class="sub">Printed on bills &amp; e-bills</span></div>
+                <div class="card-body">
+                  <div class="form-grid">
+                    <div class="field span-2">
+                      <label for="set-business-name">Outlet name</label>
+                      <input type="text" class="input" id="set-business-name" maxlength="80" required>
+                    </div>
+                    <div class="field span-2">
+                      <label for="set-business-address">Address</label>
+                      <input type="text" class="input" id="set-business-address" maxlength="160">
+                    </div>
+                    <div class="field">
+                      <label for="set-business-phone">Phone</label>
+                      <input type="tel" class="input" id="set-business-phone" maxlength="20">
+                    </div>
+                    <div class="field">
+                      <label for="set-gstin">GSTIN</label>
+                      <input type="text" class="input" id="set-gstin" maxlength="20" style="text-transform:uppercase;">
+                    </div>
+                    <div class="field">
+                      <label for="set-tables-count">Number of tables</label>
+                      <input type="number" class="input" id="set-tables-count" min="1" max="200" required>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-header"><h3><i class="fas fa-wallet"></i> Payment methods</h3><span class="sub">Options shown when settling a bill</span></div>
+                <div class="card-body" style="padding-top:4px;padding-bottom:4px;">
+                  <div class="switch-row">
+                    <div><div class="t"><i class="fas fa-qrcode" style="color:var(--primary);width:20px;"></i> UPI</div><div class="d">Google Pay, PhonePe, Paytm and other UPI apps</div></div>
+                    <label class="switch"><input type="checkbox" id="set-pay-upi"><span class="slider"></span></label>
+                  </div>
+                  <div class="switch-row">
+                    <div><div class="t"><i class="fas fa-money-bill-wave" style="color:var(--primary);width:20px;"></i> Cash</div><div class="d">Notes and coins at the counter</div></div>
+                    <label class="switch"><input type="checkbox" id="set-pay-cash"><span class="slider"></span></label>
+                  </div>
+                  <div class="switch-row">
+                    <div><div class="t"><i class="fas fa-credit-card" style="color:var(--primary);width:20px;"></i> Card</div><div class="d">Debit or credit card on the POS machine</div></div>
+                    <label class="switch"><input type="checkbox" id="set-pay-card"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card" style="grid-column:1 / -1;">
+                <div class="card-header"><h3><i class="fas fa-boxes-stacked"></i> BOM &amp; Inventory</h3><span class="sub">Recipes and automatic stock deduction</span></div>
+                <div class="card-body" style="padding-top:4px;padding-bottom:4px;">
+                  <div class="switch-row">
+                    <div><div class="t">Enable BOM &amp; Inventory</div><div class="d">Adds the "BOM &amp; Inventory" section, so you can track raw materials and link them to menu items.</div></div>
+                    <label class="switch"><input type="checkbox" id="set-bom-enabled" onchange="refreshBomSettingState()"><span class="slider"></span></label>
+                  </div>
+                  <div class="switch-row bom-dep">
+                    <div><div class="t">Deduct stock when…</div><div class="d">When should raw materials come out of stock?</div></div>
+                    <select class="select" id="set-bom-deduct" style="width:auto;min-width:200px;">
+                      <option value="order">the order is placed</option>
+                      <option value="settle">the bill is paid</option>
+                    </select>
+                  </div>
+                  <div class="switch-row bom-dep">
+                    <div><div class="t">Block orders when stock runs out</div><div class="d">Customers cannot order an item if its ingredients would go below zero.</div></div>
+                    <label class="switch"><input type="checkbox" id="set-bom-block"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="form-actions" style="margin-top:0;">
+              <button type="button" class="btn btn-secondary" onclick="loadSettings()">Discard changes</button>
+              <button type="submit" class="btn btn-primary" id="btn-save-settings"><i class="fas fa-floppy-disk"></i> Save settings</button>
+            </div>
+          </form>
         </section>
 
       </main>
     </div>
   </div>
 
-  <!-- Scripts -->
+  <!-- ═══════════════════════ MODALS ═══════════════════════ -->
+
+  <!-- Menu item form -->
+  <div class="modal-backdrop" id="item-modal" onclick="if(event.target===this) closeItemForm()">
+    <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="form-item-title">
+      <div class="modal-header">
+        <h3 id="form-item-title">Add menu item</h3>
+        <button class="btn btn-icon btn-ghost" type="button" onclick="closeItemForm()" aria-label="Close"><i class="fas fa-xmark"></i></button>
+      </div>
+      <form id="item-crud-form" onsubmit="saveItem(event)" style="display:contents;">
+        <div class="modal-body">
+          <input type="hidden" id="edit-item-id">
+          <div class="form-grid">
+            <div class="field span-2">
+              <label for="item-name-input">Item name *</label>
+              <input type="text" class="input" id="item-name-input" required placeholder="e.g. John Wick">
+            </div>
+            <div class="field span-2">
+              <label for="item-category-select">Category *</label>
+              <select class="select" id="item-category-select" required></select>
+            </div>
+            <div class="field span-2" style="grid-column:1/-1;">
+              <label for="item-desc-input">Description / ingredients</label>
+              <textarea class="textarea" id="item-desc-input" placeholder="e.g. Gin, basil, orange juice…"></textarea>
+            </div>
+            <div class="field">
+              <label for="item-avail-select">Availability *</label>
+              <select class="select" id="item-avail-select" required>
+                <option value="Available">Available</option>
+                <option value="86'd">Out of stock (86'd)</option>
+                <option value="Seasonal">Seasonal</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="item-status-select">Status</label>
+              <select class="select" id="item-status-select">
+                <option value="Published">Published</option>
+                <option value="Draft">Draft</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="item-order-input">Display order</label>
+              <input type="number" class="input" id="item-order-input" value="1" min="1">
+            </div>
+          </div>
+
+          <div class="form-section">
+            <div class="form-section-title">Tags</div>
+            <div class="checks">
+              <label class="check"><input type="checkbox" id="tag-veg-check"> Veg</label>
+              <label class="check"><input type="checkbox" id="tag-nonveg-check"> Non-Veg</label>
+              <label class="check"><input type="checkbox" id="tag-spicy-check"> Spicy</label>
+              <label class="check"><input type="checkbox" id="tag-sig-check"> Signature</label>
+              <label class="check"><input type="checkbox" id="tag-best-check"> Bestseller</label>
+            </div>
+          </div>
+
+          <div class="form-section" id="price-variants-box">
+            <div class="form-section-title">
+              <span>Prices &amp; sizes</span>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="addPriceVariantRow()"><i class="fas fa-plus"></i> Add size</button>
+            </div>
+            <div id="price-variants-container"></div>
+          </div>
+
+          <div class="form-section">
+            <div class="form-section-title">Photo or short video</div>
+            <div class="dropzone" id="media-drag-zone" tabindex="0" role="button" aria-label="Upload photo or video">
+              <i class="fas fa-cloud-arrow-up"></i>
+              <p>Drag a file here or tap to upload (JPG, PNG, WEBP or MP4)</p>
+              <input type="file" id="media-file-input" accept="image/*,video/mp4" hidden>
+            </div>
+            <div class="media-previews" id="media-previews"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeItemForm()">Cancel</button>
+          <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save item</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- User form -->
+  <div class="modal-backdrop" id="user-modal" onclick="if(event.target===this) closeUserForm()">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="form-user-title">
+      <div class="modal-header">
+        <h3 id="form-user-title">Add user</h3>
+        <button class="btn btn-icon btn-ghost" type="button" onclick="closeUserForm()" aria-label="Close"><i class="fas fa-xmark"></i></button>
+      </div>
+      <form id="user-crud-form" onsubmit="saveUserProfile(event)" style="display:contents;">
+        <div class="modal-body">
+          <input type="hidden" id="edit-user-original-name">
+          <div class="form-grid" style="grid-template-columns:1fr;">
+            <div class="field">
+              <label for="user-name-input">Username *</label>
+              <input type="text" class="input" id="user-name-input" placeholder="e.g. neha" pattern="[A-Za-z0-9._\-]{2,32}" title="2–32 letters, numbers, dots, dashes or underscores" autocapitalize="none" required>
+            </div>
+            <div class="field">
+              <label for="user-password-input">Password *</label>
+              <input type="password" class="input" id="user-password-input" placeholder="Min. 6 characters" autocomplete="new-password" required>
+            </div>
+            <div class="field">
+              <label for="user-role-select">Role *</label>
+              <select class="select" id="user-role-select" required>
+                <option value="Waiter">Waiter</option>
+                <option value="Receptionist">Receptionist</option>
+                <option value="Kitchen">Kitchen</option>
+                <option value="Owner">Owner</option>
+                <option value="Admin">Admin</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeUserForm()">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-save-user">Create user</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Raw material form -->
+  <div class="modal-backdrop" id="material-modal" onclick="if(event.target===this) closeModal('material-modal')">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="material-modal-title">
+      <div class="modal-header">
+        <h3 id="material-modal-title">Add raw material</h3>
+        <button class="btn btn-icon btn-ghost" type="button" onclick="closeModal('material-modal')" aria-label="Close"><i class="fas fa-xmark"></i></button>
+      </div>
+      <form onsubmit="saveMaterial(event)" style="display:contents;">
+        <div class="modal-body">
+          <input type="hidden" id="mat-id">
+          <div class="form-grid">
+            <div class="field span-2" style="grid-column:1/-1;">
+              <label for="mat-name">Name *</label>
+              <input type="text" class="input" id="mat-name" required maxlength="60" placeholder="e.g. Paneer, Wheat beer, Basmati rice">
+            </div>
+            <div class="field">
+              <label for="mat-unit">Unit *</label>
+              <select class="select" id="mat-unit">
+                <option value="kg">kg</option><option value="g">g</option>
+                <option value="L">L (litre)</option><option value="ml">ml</option>
+                <option value="pcs">pcs</option><option value="pack">pack</option>
+                <option value="bottle">bottle</option><option value="dozen">dozen</option>
+              </select>
+            </div>
+            <div class="field" id="mat-opening-field">
+              <label for="mat-stock">Opening stock</label>
+              <input type="number" class="input" id="mat-stock" min="0" step="any" value="0">
+            </div>
+            <div class="field">
+              <label for="mat-reorder">Reorder level</label>
+              <input type="number" class="input" id="mat-reorder" min="0" step="any" value="0">
+              <span class="hint">Flagged as low stock at or below this.</span>
+            </div>
+            <div class="field">
+              <label for="mat-cost">Cost per unit (₹)</label>
+              <input type="number" class="input" id="mat-cost" min="0" step="any" value="0">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('material-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary"><i class="fas fa-floppy-disk"></i> Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Stock adjust -->
+  <div class="modal-backdrop" id="adjust-modal" onclick="if(event.target===this) closeModal('adjust-modal')">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="adjust-modal-title">
+      <div class="modal-header">
+        <h3 id="adjust-modal-title">Adjust stock</h3>
+        <button class="btn btn-icon btn-ghost" type="button" onclick="closeModal('adjust-modal')" aria-label="Close"><i class="fas fa-xmark"></i></button>
+      </div>
+      <form onsubmit="saveAdjustment(event)" style="display:contents;">
+        <div class="modal-body">
+          <input type="hidden" id="adj-id">
+          <p class="muted" id="adj-current" style="margin-bottom:14px;"></p>
+          <div class="field" style="margin-bottom:14px;">
+            <span class="label">Type</span>
+            <div class="seg" id="adj-type">
+              <button type="button" data-v="in" class="active"><i class="fas fa-arrow-down"></i> Stock in</button>
+              <button type="button" data-v="out"><i class="fas fa-arrow-up"></i> Stock out / wastage</button>
+            </div>
+          </div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="adj-qty">Quantity *</label>
+              <input type="number" class="input" id="adj-qty" min="0" step="any" required>
+            </div>
+            <div class="field">
+              <label for="adj-note">Note</label>
+              <input type="text" class="input" id="adj-note" maxlength="80" placeholder="e.g. Supplier bill #123">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('adjust-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary"><i class="fas fa-check"></i> Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Split bill: how many people? -->
+  <div class="modal-backdrop" id="split-modal" onclick="if(event.target===this) closeModal('split-modal')">
+    <div class="modal" style="max-width:400px;" role="dialog" aria-modal="true" aria-labelledby="split-modal-title">
+      <div class="modal-header">
+        <h3 id="split-modal-title"><i class="fas fa-people-group" style="color:var(--primary);margin-right:6px;"></i> Split bill</h3>
+        <button class="btn btn-icon btn-ghost" type="button" onclick="closeModal('split-modal')" aria-label="Close"><i class="fas fa-xmark"></i></button>
+      </div>
+      <form onsubmit="applySplit(event)" style="display:contents;">
+        <div class="modal-body">
+          <div class="field">
+            <label for="split-count">Number of people</label>
+            <input type="number" class="input" id="split-count" min="2" max="50" value="2" required inputmode="numeric" style="font-size:20px;font-weight:700;text-align:center;">
+            <span class="hint" id="split-preview"></span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('split-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary"><i class="fas fa-check"></i> Create payments</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Bill: receipt + payment entry -->
+  <div class="modal-backdrop" id="bill-modal" onclick="if(event.target===this) closeBillModal()">
+    <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="bill-modal-title">
+      <div class="modal-header">
+        <h3 id="bill-modal-title">Bill &amp; payment</h3>
+        <button class="btn btn-icon btn-ghost" type="button" onclick="closeBillModal()" aria-label="Close"><i class="fas fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="bill-layout" id="bill-layout">
+          <div class="receipt" id="bill-receipt">
+            <div class="receipt-head">
+              <div class="biz" id="bill-biz-name">—</div>
+              <div class="addr" id="bill-biz-addr"></div>
+            </div>
+            <dl class="receipt-meta" id="bill-meta-info"></dl>
+            <div class="receipt-items" id="bill-items-list"></div>
+            <div class="receipt-sum">
+              <div class="row"><span>Subtotal</span><span id="bill-subtotal">₹0</span></div>
+              <div class="row"><span>Service charge (10%)</span><span id="bill-service-charge">₹0</span></div>
+              <div class="row"><span>Taxes (5%)</span><span id="bill-tax">₹0</span></div>
+              <div class="row total"><span>Grand total</span><span id="bill-grand-total">₹0</span></div>
+            </div>
+            <div class="receipt-pay hidden" id="bill-paid-lines"></div>
+            <div class="receipt-foot">Thank you for dining with us!</div>
+          </div>
+
+          <div class="pay-panel" id="pay-panel">
+            <h4>Payment entry</h4>
+            <p class="sub">Choose how the guest paid. Use <b>Split bill</b> when a group pays separately.</p>
+            <div class="pay-toolbar">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="openSplitModal()"><i class="fas fa-people-group"></i> Split bill</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-unsplit" onclick="resetPayments(1)"><i class="fas fa-rotate-left"></i> Single payment</button>
+            </div>
+            <div id="payment-rows"></div>
+            <div class="pay-summary" id="pay-summary"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" id="bill-actions-footer">
+        <button class="btn btn-secondary" onclick="printInvoice()"><i class="fas fa-print"></i> Print</button>
+        <button class="btn btn-secondary" onclick="downloadInvoicePDF()"><i class="fas fa-file-pdf"></i> PDF</button>
+        <button class="btn btn-success" onclick="confirmBillCheckout()" id="btn-settle-action"><i class="fas fa-check"></i> Record payment &amp; close table</button>
+      </div>
+    </div>
+  </div>
+
   <script src="assets/js/seed.js"></script>
   <script src="assets/js/admin.js"></script>
   <script src="assets/js/dashboard.js"></script>

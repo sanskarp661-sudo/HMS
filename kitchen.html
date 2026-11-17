@@ -2,27 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Downtown Luka — Kitchen Display System</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1716">
+  <title>Kitchen Display · Mosaic Engine HMS</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="icon" type="image/jpeg" href="images.jpg">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="assets/img/mosaic-engine-icon.svg">
   <style>
     :root {
-      --primary: #f59e0b;
-      --bg: #0a0a0e;
-      --surface: #111118;
-      --card: #17171f;
-      --border: rgba(255,255,255,0.07);
-      --text: #f1f5f9;
-      --muted: #94a3b8;
+      --primary: #e8955f;
+      --brand: #355c5d;
+      --bg: #0f1716;
+      --surface: #152120;
+      --card: #1b2a29;
+      --border: rgba(255,255,255,0.08);
+      --text: #eef4f3;
+      --muted: #93a8a6;
       --status-received: #ef4444;
       --status-preparing: #f59e0b;
       --status-ready: #22c55e;
       --status-served: #4b5563;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
 
     /* LOGIN GATE */
     #kds-login {
@@ -36,7 +38,7 @@
       border-radius: 16px; padding: 40px;
       width: 100%; max-width: 400px; text-align: center;
     }
-    .kds-login-box img { width: 64px; border-radius: 50%; margin-bottom: 16px; }
+    .kds-login-box img { width: 64px; height: 64px; border-radius: 16px; margin-bottom: 16px; }
     .kds-login-box h2 { font-size: 22px; margin-bottom: 4px; }
     .kds-login-box p { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
     .kds-input {
@@ -64,7 +66,7 @@
       position: sticky; top: 0; z-index: 100;
     }
     .kds-header-left { display: flex; align-items: center; gap: 14px; }
-    .kds-header-left img { width: 40px; border-radius: 50%; }
+    .kds-header-left img { width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0; }
     .kds-header-left h1 { font-size: 18px; font-weight: 700; }
     .kds-header-left span { font-size: 12px; color: var(--muted); }
     .kds-header-right { display: flex; align-items: center; gap: 12px; }
@@ -212,6 +214,42 @@
     .kds-empty p { font-size: 13px; opacity: 0.5; }
 
     #kds-toast-c { position: fixed; bottom: 24px; right: 24px; z-index: 10000; display: flex; flex-direction: column; gap: 8px; }
+    .kds-header-left > div { min-width: 0; }
+    .kds-header-left > div > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kds-btn-login { color: #1b1b1b; }
+    .kds-fbtn.active { color: #1b1b1b; }
+    .kds-qty { color: #1b1b1b; }
+    .kds-filters { scrollbar-width: none; }
+    .kds-filters::-webkit-scrollbar { display: none; }
+
+    /* ── Tablet ── */
+    @media (max-width: 1024px) {
+      .kds-metrics { display: grid; grid-template-columns: repeat(3, 1fr); }
+      .kds-metric { border-bottom: 1px solid var(--border); }
+      .kds-metric:nth-child(3n) { border-right: none; }
+      .kds-grid { columns: 3 240px; }
+    }
+
+    /* ── Phone ── */
+    @media (max-width: 640px) {
+      .kds-header { padding: 10px 14px; flex-wrap: wrap; gap: 10px; }
+      .kds-header-left h1 { font-size: 15px; }
+      .kds-header-left img { width: 34px; height: 34px; }
+      .kds-header-right { width: 100%; gap: 8px; }
+      .kds-header-right .kds-hbtn { flex: 1; justify-content: center; padding: 8px 6px; }
+      .kds-header-right .kds-hbtn .lbl { display: none; }
+      .kds-refresh-cd { display: none; }
+      .kds-metric { padding: 10px 6px; }
+      .kds-metric-value { font-size: 22px; }
+      .m-avg .kds-metric-value, .m-long .kds-metric-value { font-size: 17px; }
+      .kds-metric-label { font-size: 9.5px; letter-spacing: 0.2px; }
+      .kds-filters { padding: 10px 14px; flex-wrap: nowrap; overflow-x: auto; }
+      .kds-fbtn { flex-shrink: 0; }
+      .kds-search-box { margin-left: 0; width: auto; min-width: 170px; flex: 1 0 170px; }
+      .kds-grid { padding: 14px; columns: 1; }
+      .kds-login-box { padding: 28px 20px; }
+      #kds-toast-c { left: 14px; right: 14px; bottom: 14px; }
+    }
   </style>
 </head>
 <body>
@@ -219,11 +257,11 @@
   <!-- LOGIN GATE -->
   <div id="kds-login">
     <div class="kds-login-box">
-      <img src="images.jpg" alt="Downtown Luka">
+      <img src="assets/img/mosaic-engine-icon.svg" alt="Mosaic Engine">
       <h2>Kitchen Display</h2>
       <p>Sign in with your staff credentials to access the KDS</p>
-      <input type="text" class="kds-input" id="kds-username" placeholder="Username" autocomplete="username">
-      <input type="password" class="kds-input" id="kds-password" placeholder="Password" autocomplete="current-password"
+      <input type="text" class="kds-input" id="kds-username" placeholder="Username" autocomplete="username" autocapitalize="none" aria-label="Username">
+      <input type="password" class="kds-input" id="kds-password" placeholder="Password" autocomplete="current-password" aria-label="Password"
              onkeydown="if(event.key==='Enter') kdsLogin()">
       <button class="kds-btn-login" onclick="kdsLogin()">
         <i class="fas fa-sign-in-alt"></i> &nbsp;Sign In to Kitchen
@@ -238,19 +276,19 @@
     <!-- Header -->
     <div class="kds-header">
       <div class="kds-header-left">
-        <img src="images.jpg" alt="Logo">
+        <img src="assets/img/mosaic-engine-icon.svg" alt="Mosaic Engine">
         <div>
-          <h1><i class="fas fa-fire-flame-curved" style="color:var(--primary);font-size:16px;margin-right:6px;"></i>Kitchen Display System</h1>
-          <span>Downtown Luka, Cyberhub &nbsp;·&nbsp; <span id="kds-staff-name">Kitchen Staff</span></span>
+          <h1><i class="fas fa-fire-burner" style="color:var(--primary);font-size:15px;margin-right:6px;"></i>Kitchen Display</h1>
+          <span><span id="kds-outlet-name">Mosaic Engine HMS</span> &nbsp;·&nbsp; <span id="kds-staff-name" style="display:inline;">Kitchen Staff</span></span>
         </div>
       </div>
       <div class="kds-header-right">
         <div class="kds-live-dot"></div>
         <span class="kds-live-label">LIVE</span>
         <span class="kds-refresh-cd" id="kds-cd">Refresh in 5s</span>
-        <button class="kds-hbtn" onclick="kdsRefreshNow()"><i class="fas fa-sync-alt"></i> Refresh</button>
-        <a href="admin.html" class="kds-hbtn"><i class="fas fa-arrow-left"></i> Admin Panel</a>
-        <button class="kds-hbtn" onclick="kdsLogout()"><i class="fas fa-sign-out-alt"></i> Logout</button>
+        <button class="kds-hbtn" onclick="kdsRefreshNow()" title="Refresh now"><i class="fas fa-rotate"></i> <span class="lbl">Refresh</span></button>
+        <a href="admin.html" class="kds-hbtn" id="kds-admin-link" title="Back to Mosaic Engine HMS"><i class="fas fa-table-columns"></i> <span class="lbl">Admin panel</span></a>
+        <button class="kds-hbtn" onclick="kdsLogout()" title="Sign out"><i class="fas fa-right-from-bracket"></i> <span class="lbl">Sign out</span></button>
       </div>
     </div>
 

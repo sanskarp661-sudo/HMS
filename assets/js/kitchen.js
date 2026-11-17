@@ -43,6 +43,13 @@ function kdsClearLocalLogin() {
 })();
 
 function kdsShowApp(user) {
+  // Outlet name from Settings; kitchen staff don't get a link back to the admin panel
+  fetch("/api/settings/public").then(r => r.ok ? r.json() : null).then(s => {
+    if (s && s.business_name) document.getElementById("kds-outlet-name").textContent = s.business_name;
+  }).catch(() => {});
+  const role = sessionStorage.getItem("luka_logged_role");
+  const adminLink = document.getElementById("kds-admin-link");
+  if (adminLink) adminLink.style.display = role === "Kitchen" ? "none" : "";
   document.getElementById("kds-login").style.display  = "none";
   document.getElementById("kds-app").style.display    = "flex";
   document.getElementById("kds-staff-name").textContent = user;
@@ -100,11 +107,7 @@ function kdsLogin() {
       sessionStorage.setItem("luka_logged_in",   "true");
       sessionStorage.setItem("luka_logged_user",  data.username || username);
       sessionStorage.setItem("luka_logged_role",  data.role);
-      document.getElementById("kds-login").style.display = "none";
-      document.getElementById("kds-app").style.display   = "flex";
-      document.getElementById("kds-staff-name").textContent = data.username || username;
-      kdsStartRefreshLoop();
-      kdsLoadOrders();
+      kdsShowApp(data.username || username);
     } else {
       errEl.textContent = data.message || "Invalid credentials.";
     }
@@ -192,8 +195,8 @@ function kdsCardHTML(o) {
     <div class="kds-item">
       <div class="kds-qty">${it.quantity}</div>
       <div>
-        <div class="kds-iname">${it.name}</div>
-        ${it.variant ? `<div class="kds-ivar">${it.variant}</div>` : ""}
+        <div class="kds-iname">${kdsEscape(it.name)}</div>
+        ${it.variant ? `<div class="kds-ivar">${kdsEscape(it.variant)}</div>` : ""}
       </div>
     </div>
   `).join("");
@@ -207,7 +210,7 @@ function kdsCardHTML(o) {
   return `<div class="kds-card" data-status="${o.status}" data-id="${o.order_id}">
     <div class="kds-card-head">
       <div class="kds-card-head-left">
-        <div class="kds-table-no">Table ${o.table_no}</div>
+        <div class="kds-table-no">Table ${kdsEscape(o.table_no)}</div>
         <div class="kds-card-meta">Round ${o.round || 1} &nbsp;·&nbsp; ${formatTime(o.timestamp)}</div>
       </div>
       <div class="kds-card-head-right">

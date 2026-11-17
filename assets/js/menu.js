@@ -377,7 +377,7 @@ function createItemCard(item, showCategoryName) {
     const prices = item.price_variants.map(v => v.price);
     const minPrice = Math.min(...prices);
     if (item.price_variants.length > 1) {
-      priceStr = `From ₹${minPrice}`;
+      priceStr = `<small>from</small>₹${minPrice}`;
     } else {
       priceStr = `₹${minPrice}`;
     }
@@ -417,35 +417,33 @@ function createItemCard(item, showCategoryName) {
     if (item.price_variants && item.price_variants.length === 1) {
       const v = item.price_variants[0];
       directAddHTML = `
-        <button class="btn btn-primary" onclick="event.stopPropagation(); addItemToCart('${item.id}', '${item.name.replace(/'/g, "\\'")}', '${v.label}', ${v.price})" style="padding: 4px 10px; font-size: 11px; background:var(--primary); cursor:pointer; border-radius:4px; border:none; color:#fff;">
+        <button class="add-btn" onclick="event.stopPropagation(); addItemToCart('${item.id}', '${item.name.replace(/'/g, "\\'")}', '${v.label.replace(/'/g, "\\'")}', ${v.price})" aria-label="Add ${item.name}">
           <i class="fas fa-plus"></i> Add
         </button>
       `;
     } else {
       directAddHTML = `
-        <button class="btn btn-secondary" onclick="event.stopPropagation(); window.openItemModalFromCard('${item.id}')" style="padding: 4px 10px; font-size: 11px; cursor:pointer; border-radius:4px; border:1px solid rgba(255,255,255,0.2); background:transparent; color:#fff;">
-          Select
+        <button class="select-btn" onclick="event.stopPropagation(); window.openItemModalFromCard('${item.id}')" aria-label="Choose size for ${item.name}">
+          Choose <i class="fas fa-chevron-right" style="font-size:10px;"></i>
         </button>
       `;
     }
   }
 
   card.innerHTML = `
-    <div class="item-info" style="display:flex; flex-direction:column; justify-content:space-between; flex:1;">
-      <div>
-        <div class="item-title-row">
-          <h4 class="item-name">${item.name}</h4>
-        </div>
-        <p class="item-desc">${item.description || "Freshly made house special."}</p>
-        <div style="margin-top: 4px;">${tagsHTML}</div>
+    <div class="item-info">
+      <div class="item-title-row">
+        <h4 class="item-name">${item.name}</h4>
       </div>
-      <div class="item-prices" style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-top:8px;">
-        <span class="price-row-display" style="font-weight:600; color:var(--primary);">${priceStr}</span>
+      <p class="item-desc">${item.description || "Freshly made house special."}</p>
+      ${tagsHTML ? `<div class="item-tags">${tagsHTML}</div>` : ""}
+      <div class="item-prices">
+        <span class="price-row-display">${priceStr}</span>
         ${directAddHTML}
       </div>
     </div>
     <div class="item-image-wrapper">
-      <img src="${imgURL}" alt="${item.name}" class="item-thumbnail" onerror="window.handleImageError(this, '${item.id}')">
+      <img src="${imgURL}" alt="${item.name}" class="item-thumbnail" loading="lazy" onerror="window.handleImageError(this, '${item.id}')">
       ${catBadgeHTML}
     </div>
   `;
@@ -536,7 +534,7 @@ function openModal(item) {
     if (window.activeTableNo) {
       cartActionHTML = `
         <td style="text-align: right;">
-          <button class="btn btn-primary" onclick="addItemToCart('${item.id}', '${item.name.replace(/'/g, "\\'")}', '${v.label}', ${v.price})" style="padding: 4px 8px; font-size: 11px; background:var(--primary); cursor:pointer;">
+          <button class="add-btn" onclick="addItemToCart('${item.id}', '${item.name.replace(/'/g, "\\'")}', '${v.label.replace(/'/g, "\\'")}', ${v.price})">
             <i class="fas fa-plus"></i> Add
           </button>
         </td>
@@ -647,8 +645,37 @@ function initTableCartSystem() {
 function updateCartBadges() {
   const badge = document.getElementById("cart-count-badge");
   const count = Object.values(cart).reduce((sum, item) => sum + item.quantity, 0);
+  const total = Object.values(cart).reduce((sum, item) => sum + item.price * item.quantity, 0);
   if (badge) badge.innerText = count;
+  const bar = document.getElementById("cart-bar");
+  if (bar) {
+    document.getElementById("cart-bar-count").innerText = count;
+    document.getElementById("cart-bar-total").innerText = `₹${total.toLocaleString("en-IN")}`;
+    const drawerOpen = document.getElementById("cart-drawer").style.display === "flex";
+    bar.classList.toggle("show", count > 0 && !drawerOpen);
+  }
 }
+
+// Drawers share one backdrop and lock page scrolling while open
+function syncDrawerState() {
+  const anyOpen = ["cart-drawer", "tracking-modal"].some(id => document.getElementById(id).style.display === "flex");
+  document.getElementById("drawer-backdrop").classList.toggle("show", anyOpen);
+  document.body.classList.toggle("no-scroll", anyOpen);
+  updateCartBadges();
+}
+
+function closeDrawers() {
+  document.getElementById("cart-drawer").style.display = "none";
+  document.getElementById("tracking-modal").style.display = "none";
+  trackingModalOpen = false;
+  syncDrawerState();
+}
+
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if (document.getElementById("item-modal").classList.contains("active")) closeModal();
+  else closeDrawers();
+});
 
 function addItemToCart(itemId, itemName, variantLabel, price) {
   const key = `${itemId}_${variantLabel}`;
@@ -671,12 +698,15 @@ function addItemToCart(itemId, itemName, variantLabel, price) {
 
 function toggleCartDrawer() {
   const drawer = document.getElementById("cart-drawer");
-  if (drawer.style.display === "none") {
+  if (drawer.style.display !== "flex") {
+    document.getElementById("tracking-modal").style.display = "none";
+    trackingModalOpen = false;
     drawer.style.display = "flex";
     renderCartItems();
   } else {
     drawer.style.display = "none";
   }
+  syncDrawerState();
 }
 
 function changeCartQty(key, change) {
@@ -698,7 +728,7 @@ function renderCartItems() {
 
   const itemsArr = Object.keys(cart);
   if (itemsArr.length === 0) {
-    container.innerHTML = `<div style="text-align:center; color: #9ca3af; margin-top: 40px; font-size:13px;">Your cart is empty. Add food or bar items to start ordering!</div>`;
+    container.innerHTML = `<div class="drawer-empty"><i class="fas fa-bag-shopping"></i>Your cart is empty.<br>Tap <b>Add</b> on any dish or drink to start.</div>`;
     subtotalVal.innerText = "₹0";
     return;
   }
@@ -712,14 +742,14 @@ function renderCartItems() {
     const row = document.createElement("div");
     row.className = "cart-item-row";
     row.innerHTML = `
-      <div>
-        <div style="font-weight:600; font-size:13px;">${item.name}</div>
-        <div style="font-size:11px; color:#9ca3af;">${item.variant} • ₹${item.price}</div>
+      <div style="min-width:0;">
+        <div class="cart-item-name">${item.name}</div>
+        <div class="cart-item-meta">${item.variant} · ₹${item.price} · <b>₹${lineTotal}</b></div>
       </div>
       <div class="cart-qty-ctrl">
-        <button class="cart-qty-btn" onclick="changeCartQty('${key}', -1)">-</button>
-        <span style="font-size:13px; font-weight:600; min-width:16px; text-align:center;">${item.quantity}</span>
-        <button class="cart-qty-btn" onclick="changeCartQty('${key}', 1)">+</button>
+        <button class="cart-qty-btn" onclick="changeCartQty('${key.replace(/'/g, "\\'")}', -1)" aria-label="Remove one">−</button>
+        <span>${item.quantity}</span>
+        <button class="cart-qty-btn" onclick="changeCartQty('${key.replace(/'/g, "\\'")}', 1)" aria-label="Add one">+</button>
       </div>
     `;
     container.appendChild(row);
@@ -750,12 +780,15 @@ function submitCartOrder() {
       items: itemsArr
     })
   })
-  .then(res => {
-    if (!res.ok) throw new Error("Order placement failed.");
+  .then(async res => {
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.message || "Could not place the order. Please try again.");
+    }
     return res.json();
   })
   .then(data => {
-    window.showToast("Order placed successfully! Sending to kitchen...", "success");
+    window.showToast("Order sent to the kitchen!", "success");
     cart = {};
     localStorage.removeItem(`luka_cart_table_${window.activeTableNo}`);
     updateCartBadges();
@@ -773,11 +806,8 @@ function submitCartOrder() {
 let trackingModalOpen = false;
 function toggleTrackingModal(forceOpen = false) {
   const modal = document.getElementById("tracking-modal");
-  if (forceOpen) {
-    modal.style.display = "flex";
-    trackingModalOpen = true;
-    renderTrackingRounds();
-  } else if (modal.style.display === "none") {
+  if (forceOpen === true || modal.style.display !== "flex") {
+    document.getElementById("cart-drawer").style.display = "none";
     modal.style.display = "flex";
     trackingModalOpen = true;
     renderTrackingRounds();
@@ -785,6 +815,7 @@ function toggleTrackingModal(forceOpen = false) {
     modal.style.display = "none";
     trackingModalOpen = false;
   }
+  syncDrawerState();
 }
 
 let activeRounds = [];
@@ -841,7 +872,7 @@ function renderTrackingRounds() {
   container.innerHTML = "";
 
   if (activeRounds.length === 0) {
-    container.innerHTML = `<div style="text-align:center; color: #9ca3af; margin-top: 40px; font-size:13px;">No rounds ordered yet for this table.</div>`;
+    container.innerHTML = `<div class="drawer-empty"><i class="fas fa-receipt"></i>No orders yet for this table.</div>`;
     subtotalVal.innerText = "₹0";
     return;
   }
@@ -853,7 +884,7 @@ function renderTrackingRounds() {
     
     let timeStr = "";
     if (round.timestamp && round.timestamp.includes("T")) {
-      timeStr = round.timestamp.split("T")[1].substring(0, 5);
+      timeStr = new Date(round.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
     }
 
     let statusClass = "received";
@@ -863,28 +894,22 @@ function renderTrackingRounds() {
 
     card.innerHTML = `
       <div class="round-header">
-        <span style="font-weight:700; color:var(--primary);">ROUND ${index + 1} • ${timeStr}</span>
+        <span style="font-weight:700;">Round ${index + 1} <span style="color:var(--text-muted);font-weight:500;">· ${timeStr}</span></span>
         <span class="status-pill ${statusClass}">${round.status}</span>
       </div>
-      <div style="display:flex; flex-direction:column; gap:4px; font-size:12px;">
-        ${round.items.map(i => {
-          const lineCost = i.price * i.quantity;
-          totalSpent += lineCost;
-          return `
-            <div style="display:flex; justify-content:space-between; margin-top:4px;">
-              <span>${i.name} (${i.variant}) <strong style="color:var(--primary);">x${i.quantity}</strong></span>
-              <span>₹${lineCost}</span>
-            </div>
-          `;
-        }).join("")}
-      </div>
+      ${round.items.map(i => {
+        const lineCost = i.price * i.quantity;
+        totalSpent += lineCost;
+        return `<div class="round-line"><span><strong style="color:var(--primary);">${i.quantity}×</strong> ${i.name} <span style="color:var(--text-muted);font-size:12.5px;">· ${i.variant}</span></span><span>₹${lineCost}</span></div>`;
+      }).join("")}
     `;
     container.appendChild(card);
   });
 
-  const serviceCharge = Math.round(totalSpent * 0.10);
-  const tax = Math.round(totalSpent * 0.05);
-  const grandTotal = totalSpent + serviceCharge + tax;
+  const r2 = n => Math.round(n * 100) / 100;
+  const serviceCharge = r2(totalSpent * 0.10);
+  const tax = r2(totalSpent * 0.05);
+  const grandTotal = r2(totalSpent + serviceCharge + tax);
 
   const subtotalEl = document.getElementById("tracking-subtotal-val");
   const svcEl = document.getElementById("tracking-service-charge-val");
@@ -922,12 +947,12 @@ function requestCustomerCheckout() {
   })
   .then(data => {
     window.showToast("Checkout requested! Staff has been notified to settle your bill.", "success");
-    btn.innerHTML = `<i class="fas fa-check"></i> Bill Requested`;
+    btn.innerHTML = `<i class="fas fa-check"></i> Bill requested — staff are on the way`;
   })
   .catch(err => {
     window.showToast(err.message, "error");
     btn.disabled = false;
-    btn.innerHTML = `<i class="fas fa-file-invoice-dollar"></i> Request Settle Bill`;
+    btn.innerHTML = `<i class="fas fa-file-invoice-dollar"></i> Ask for the Bill`;
   });
 }
 

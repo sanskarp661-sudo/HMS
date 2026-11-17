@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#fbf9f3">
   <title>Downtown Luka — Digital Menu</title>
   <meta name="description" content="Explore Downtown Luka Cyberhub's digital food and bar menu. Browse items, cocktails, craft beers, and main courses in real-time.">
   
@@ -29,12 +30,14 @@
       </div>
       
       <!-- Cart and Order status triggers -->
-      <div style="display: flex; gap: 8px;">
-        <button class="btn btn-secondary" onclick="toggleTrackingModal()" style="font-size:12px; padding: 6px 12px; display: none;" id="btn-track-trigger">
-          <i class="fas fa-receipt"></i> Track Orders <span class="badge" id="tracking-count-badge" style="background:#ef4444; color:#fff; font-size:10px; border-radius:50%; padding:2px 6px; margin-left:4px; display:none;">0</span>
+      <div class="nav-actions">
+        <button class="nav-btn" onclick="toggleTrackingModal()" style="display: none;" id="btn-track-trigger" aria-label="My orders">
+          <i class="fas fa-receipt"></i><span class="lbl">My Orders</span>
+          <span class="nav-count" id="tracking-count-badge" style="display:none;">0</span>
         </button>
-        <button class="btn btn-primary" onclick="toggleCartDrawer()" style="font-size:12px; padding: 6px 12px; background:var(--primary); display: none;" id="btn-cart-trigger">
-          <i class="fas fa-shopping-cart"></i> Cart (<span id="cart-count-badge">0</span>)
+        <button class="nav-btn nav-btn-primary" onclick="toggleCartDrawer()" style="display: none;" id="btn-cart-trigger" aria-label="Cart">
+          <i class="fas fa-bag-shopping"></i><span class="lbl">Cart</span>
+          <span class="nav-count" id="cart-count-badge">0</span>
         </button>
       </div>
     </div>
@@ -68,11 +71,11 @@
     <div id="menu-workspace" style="display: none;">
       
       <!-- Back button and title -->
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <button class="btn btn-secondary" onclick="goBackToLanding()">
-          <i class="fas fa-arrow-left"></i> Back
+      <div class="workspace-head">
+        <button class="back-btn" onclick="goBackToLanding()" aria-label="Back to menu sections">
+          <i class="fas fa-arrow-left"></i>
         </button>
-        <h2 id="workspace-title" style="text-transform: uppercase; font-size: 20px; border-bottom: 3px solid var(--primary); padding-bottom: 4px;"></h2>
+        <h2 id="workspace-title"></h2>
       </div>
 
       <!-- Sticky Category Tab Bar (Horizontal Scrollable) -->
@@ -105,7 +108,7 @@
       </div>
 
       <!-- Empty State -->
-      <div id="empty-state" style="display: none; text-align: center; padding: 48px 16px; background: #ffffff; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+      <div id="empty-state" class="empty-box" style="display: none;">
         <i class="fas fa-search" style="font-size: 40px; color: var(--text-light); margin-bottom: 12px;"></i>
         <h3 id="empty-state-title">No items found</h3>
         <p style="color: var(--text-muted); font-size: 14px; margin-top: 8px;">Try searching for something else or clearing the search text.</p>
@@ -163,146 +166,85 @@
   </div>
 
   <!-- Cart slide-over drawer -->
-  <div id="cart-drawer" class="cart-drawer" style="display:none; position: fixed; top: 0; right: 0; width: 380px; max-width: 100%; height: 100%; background: #18181b; border-left: 1px solid rgba(255,255,255,0.1); z-index: 1000; box-shadow: -4px 0 20px rgba(0,0,0,0.5); flex-direction: column; color: #fff;">
-    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center;">
-      <h3 style="margin:0; font-size: 16px;"><i class="fas fa-shopping-cart" style="color:var(--primary); margin-right:8px;"></i>Your Table Order</h3>
-      <button class="btn btn-secondary" onclick="toggleCartDrawer()" style="padding:4px 8px; font-size:12px;"><i class="fas fa-times"></i> Close</button>
+  <div class="drawer-backdrop" id="drawer-backdrop" onclick="closeDrawers()"></div>
+  <div id="cart-drawer" class="cart-drawer" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="cart-title">
+    <div class="drawer-head">
+      <h3 id="cart-title"><i class="fas fa-bag-shopping"></i>Your Order</h3>
+      <button class="drawer-close" onclick="toggleCartDrawer()" aria-label="Close"><i class="fas fa-xmark"></i></button>
     </div>
     
-    <div id="cart-items-list" style="flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+    <div id="cart-items-list" class="drawer-body">
       <!-- Populated dynamically -->
       <div style="text-align:center; color: #9ca3af; margin-top: 40px; font-size: 13px;">Your cart is empty. Add food or bar items to start ordering!</div>
     </div>
     
-    <div style="padding: 16px; border-top: 1px solid rgba(255,255,255,0.1); background: #222225;">
-      <div style="display:flex; justify-content:space-between; margin-bottom:12px; font-weight:600; font-size:15px;">
+    <div class="drawer-foot">
+      <div class="drawer-total">
         <span>Subtotal</span>
         <span id="cart-subtotal-val">₹0</span>
       </div>
-      <button class="btn btn-primary" onclick="submitCartOrder()" style="width: 100%; justify-content: center; background: var(--primary); padding: 12px; font-size:14px; font-weight: 600;">
-        <i class="fas fa-paper-plane" style="margin-right:6px;"></i> Send Order to Kitchen
+      <button class="btn btn-primary btn-block btn-lg" onclick="submitCartOrder()" id="btn-send-order">
+        <i class="fas fa-paper-plane"></i> Send Order to Kitchen
       </button>
     </div>
   </div>
 
   <!-- Order Tracking slide-over panel -->
-  <div id="tracking-modal" class="cart-drawer" style="display:none; position: fixed; top: 0; right: 0; width: 420px; max-width: 100%; height: 100%; background: #18181b; border-left: 1px solid rgba(255,255,255,0.1); z-index: 1001; box-shadow: -4px 0 20px rgba(0,0,0,0.5); flex-direction: column; color: #fff;">
-    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center;">
-      <h3 style="margin:0; font-size: 16px;"><i class="fas fa-receipt" style="color:var(--primary); margin-right:8px;"></i>Dining Session Status</h3>
-      <button class="btn btn-secondary" onclick="toggleTrackingModal()" style="padding:4px 8px; font-size:12px;"><i class="fas fa-times"></i> Close</button>
+  <div id="tracking-modal" class="cart-drawer" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="track-title">
+    <div class="drawer-head">
+      <h3 id="track-title"><i class="fas fa-receipt"></i>My Orders</h3>
+      <button class="drawer-close" onclick="toggleTrackingModal()" aria-label="Close"><i class="fas fa-xmark"></i></button>
     </div>
     
-    <div id="tracking-rounds-list" style="flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px;">
+    <div id="tracking-rounds-list" class="drawer-body">
       <!-- Populated dynamically -->
       <div style="text-align:center; color: #9ca3af; margin-top: 40px; font-size: 13px;">No rounds ordered yet for this table.</div>
     </div>
     
-    <div style="padding: 16px; border-top: 1px solid rgba(255,255,255,0.1); background: #222225; display: flex; flex-direction: column; gap: 8px;">
-      <div style="font-size:12px; display: flex; flex-direction: column; gap: 4px; color:#a1a1aa;">
+    <div class="drawer-foot">
+      <div class="drawer-breakdown">
         <div style="display:flex; justify-content:space-between;"><span>Est. Subtotal</span><span id="tracking-subtotal-val">₹0</span></div>
         <div style="display:flex; justify-content:space-between;"><span>Service Charge (10%)</span><span id="tracking-service-charge-val">₹0</span></div>
         <div style="display:flex; justify-content:space-between;"><span>Government Taxes (5%)</span><span id="tracking-tax-val">₹0</span></div>
-        <div style="display:flex; justify-content:space-between; font-size:14px; font-weight:700; color:#fff; border-top: 1px solid rgba(255,255,255,0.1); padding-top:4px; margin-top:2px;">
+        <div class="drawer-total" style="margin:6px 0 0; padding-top:8px; border-top:1px solid var(--border-color);">
           <span>Est. Total Due</span>
           <span id="tracking-total-val">₹0</span>
         </div>
       </div>
       
-      <button class="btn btn-primary" onclick="requestCustomerCheckout()" style="width: 100%; justify-content: center; background: #8b5cf6; padding: 10px; font-size:13px; font-weight: 600; margin-top:4px; border:none; cursor:pointer;" id="btn-request-checkout">
-        <i class="fas fa-file-invoice-dollar" style="margin-right:6px;"></i> Request Settle Bill
+      <button class="btn btn-dark btn-block btn-lg" onclick="requestCustomerCheckout()" id="btn-request-checkout">
+        <i class="fas fa-file-invoice-dollar"></i> Ask for the Bill
       </button>
     </div>
   </div>
 
-  <style>
-    /* Styling rules for customer ordering */
-    .cart-drawer {
-      animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-    }
-    @keyframes slideInRight {
-      from { transform: translateX(100%); }
-      to { transform: translateX(0); }
-    }
-    .cart-item-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 0;
-      border-bottom: 1px solid rgba(255,255,255,0.05);
-    }
-    .cart-qty-ctrl {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .cart-qty-btn {
-      background: rgba(255,255,255,0.1);
-      border: none;
-      color: #fff;
-      width: 24px;
-      height: 24px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .cart-qty-btn:hover {
-      background: var(--primary);
-    }
-    .round-card {
-      background: rgba(255,255,255,0.03);
-      border: 1px solid rgba(255,255,255,0.06);
-      border-radius: 8px;
-      padding: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .round-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-bottom: 1px solid rgba(255,255,255,0.05);
-      padding-bottom: 6px;
-      font-size: 12px;
-    }
-    .status-pill {
-      font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-weight: 600;
-      text-transform: uppercase;
-    }
-    .status-pill.received { background: #3b82f6; color: #fff; }
-    .status-pill.preparing { background: #f59e0b; color: #fff; }
-    .status-pill.ready { background: #10b981; color: #fff; }
-    .status-pill.served { background: #6b7280; color: #fff; }
-  </style>
+
+  <!-- Floating cart bar (phones & tablets) -->
+  <button class="cart-bar" id="cart-bar" onclick="toggleCartDrawer()" aria-label="View cart">
+    <span class="cart-bar-count"><span id="cart-bar-count">0</span> items</span>
+    <span class="cart-bar-cta">View cart <i class="fas fa-arrow-right"></i></span>
+    <span class="cart-bar-total" id="cart-bar-total">₹0</span>
+  </button>
 
   <!-- Welcome Guest Modal (FR-21) -->
-  <div class="modal" id="welcome-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 1200; align-items: center; justify-content: center;">
-    <div class="form-box" style="width: 400px; max-width: 90%; background: #18181b; color: #fff; padding: 24px; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-      <div style="text-align: center; margin-bottom: 20px;">
-        <img src="images.jpg" alt="Luka Logo" style="width: 65px; height: 65px; border-radius: 50%; margin-bottom: 8px; border: 1px solid rgba(255,255,255,0.2);">
-        <h2 style="font-family:'Outfit', sans-serif; font-size: 20px; color:var(--primary); margin:0;" id="welcome-title">Table Ordering</h2>
-        <p style="font-size: 12px; color:#9ca3af; margin-top:4px;">Welcome to Downtown Luka! Please enter your details to start ordering.</p>
+  <div class="welcome-backdrop" id="welcome-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+    <div class="welcome-card">
+      <div class="welcome-head">
+        <img src="images.jpg" alt="Downtown Luka">
+        <h2 id="welcome-title">Table Ordering</h2>
+        <p>Welcome to Downtown Luka! Tell us who's ordering and we'll send everything straight to the kitchen.</p>
       </div>
-      
       <form id="welcome-guest-form" onsubmit="submitWelcomeGuest(event)">
-        <div class="form-group" style="margin-bottom:14px;">
-          <label style="font-size:12px; color:#a1a1aa; display:block; margin-bottom:6px; text-align: left;">Your Name *</label>
-          <input type="text" id="guest-name-input" class="input-control" placeholder="e.g. John Doe" required style="width:100%; padding:10px; background:#27272a; border:1px solid rgba(255,255,255,0.1); color:#fff; border-radius:6px;">
-        </div>
-        
-        <div class="form-group" style="margin-bottom:20px;">
-          <label style="font-size:12px; color:#a1a1aa; display:block; margin-bottom:6px; text-align: left;">Contact Number *</label>
-          <input type="tel" id="guest-phone-input" class="input-control" placeholder="e.g. 9876543210" pattern="[0-9]{10}" title="Please enter a valid 10-digit mobile number" required style="width:100%; padding:10px; background:#27272a; border:1px solid rgba(255,255,255,0.1); color:#fff; border-radius:6px;">
-        </div>
-        
-        <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center; background:var(--primary); padding:12px; font-weight:600; border:none; border-radius:6px; cursor:pointer;">
-          <i class="fas fa-utensils" style="margin-right:6px;"></i> Start Table Order
+        <label class="w-field">
+          <span>Your name</span>
+          <input type="text" id="guest-name-input" placeholder="e.g. Priya" autocomplete="name" maxlength="40" required>
+        </label>
+        <label class="w-field">
+          <span>Mobile number <small>(for your e-bill)</small></span>
+          <input type="tel" id="guest-phone-input" placeholder="10-digit mobile number" inputmode="numeric" autocomplete="tel-national" pattern="[0-9]{10}" maxlength="10" title="Please enter a valid 10-digit mobile number" required>
+        </label>
+        <button type="submit" class="btn btn-primary btn-block btn-lg">
+          <i class="fas fa-utensils"></i> Start ordering
         </button>
       </form>
     </div>

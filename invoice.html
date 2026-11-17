@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Downtown Luka — Digital Invoice Receipt</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Your e-bill</title>
+  <link rel="icon" type="image/jpeg" href="images.jpg">
   
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -241,6 +242,15 @@
       background: rgba(255, 255, 255, 0.12);
     }
 
+    .pay-line { display: flex; justify-content: space-between; font-size: 13px; padding: 6px 0; border-bottom: 1px dashed rgba(255,255,255,0.05); }
+    .pay-line:last-child { border-bottom: none; }
+    .pay-line .m { color: var(--text-muted); }
+    @media (max-width: 480px) {
+      body { padding: 12px; justify-content: flex-start; }
+      .invoice-container { padding: 20px 16px; }
+      .actions-row { flex-direction: column; }
+    }
+
     .error-container {
       text-align: center;
       padding: 40px 20px;
@@ -283,8 +293,8 @@
       <!-- Brand Header -->
       <div class="brand-section">
         <img src="images.jpg" class="brand-logo" alt="Downtown Luka Logo">
-        <div class="brand-name">DOWNTOWN LUKA</div>
-        <div class="brand-sub">Est. 2011 • Cyberhub, Gurugram</div>
+        <div class="brand-name" id="val-biz-name">DOWNTOWN LUKA</div>
+        <div class="brand-sub" id="val-biz-sub">Cyberhub, Gurugram</div>
       </div>
 
       <!-- Metadata Box -->
@@ -337,6 +347,12 @@
         </div>
       </div>
 
+      <!-- Payments -->
+      <div id="payments-block" style="display:none; margin-bottom: 20px;">
+        <div class="items-title">Payment</div>
+        <div id="payments-list"></div>
+      </div>
+
       <!-- Footer Thankyou -->
       <div class="footer-note">
         <strong>Thank you for visiting Downtown Luka!</strong><br>
@@ -371,6 +387,13 @@
         return;
       }
 
+      fetch("/api/settings/public").then(r => r.ok ? r.json() : null).then(st => {
+        if (!st) return;
+        document.getElementById("val-biz-name").textContent = (st.business_name || "").toUpperCase();
+        document.getElementById("val-biz-sub").textContent = [st.business_address, st.gstin ? "GSTIN " + st.gstin : ""].filter(Boolean).join(" · ");
+        document.title = `${st.business_name} — e-bill`;
+      }).catch(() => {});
+
       fetch(`/api/invoice?id=${encodeURIComponent(invoiceId)}`)
       .then(res => {
         if (!res.ok) throw new Error("Invoice lookup failed.");
@@ -401,23 +424,31 @@
 
       const container = document.getElementById("invoice-items-container");
       container.innerHTML = "";
+      const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      const money = n => "₹" + (Math.round((Number(n) || 0) * 100) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 });
       inv.items.forEach(item => {
         const row = document.createElement("div");
         row.className = "item-row";
         row.innerHTML = `
           <div class="item-info">
-            <span class="item-name">${item.name}</span>
-            <span class="item-qty">${item.variant} x${item.quantity}</span>
+            <span class="item-name">${esc(item.name)}</span>
+            <span class="item-qty">${esc(item.variant)} × ${esc(item.quantity)}</span>
           </div>
-          <span class="item-price">₹${item.price * item.quantity}</span>
+          <span class="item-price">${money(item.price * item.quantity)}</span>
         `;
         container.appendChild(row);
       });
 
-      document.getElementById("val-subtotal").innerText = `₹${inv.subtotal}`;
-      document.getElementById("val-service").innerText = `₹${inv.service_charge}`;
-      document.getElementById("val-tax").innerText = `₹${inv.tax}`;
-      document.getElementById("val-total").innerText = `₹${inv.total}`;
+      if (Array.isArray(inv.payments) && inv.payments.length) {
+        document.getElementById("payments-list").innerHTML = inv.payments.map(p =>
+          `<div class="pay-line"><span>${inv.payments.length > 1 ? esc(p.label) + " · " : ""}<span class="m">${esc(p.method)}</span></span><span>${money(p.amount)}</span></div>`).join("");
+        document.getElementById("payments-block").style.display = "block";
+      }
+
+      document.getElementById("val-subtotal").innerText = money(inv.subtotal);
+      document.getElementById("val-service").innerText = money(inv.service_charge);
+      document.getElementById("val-tax").innerText = money(inv.tax);
+      document.getElementById("val-total").innerText = money(inv.total);
 
       document.getElementById("invoice-loading").style.display = "none";
       document.getElementById("invoice-content").style.display = "block";
