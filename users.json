@@ -1,0 +1,26 @@
+{
+  "admin": {
+    "password": "admin123",
+    "role": "Admin"
+  },
+  "khushi": {
+    "password": "khushi",
+    "role": "Admin"
+  },
+  "manager": {
+    "password": "luka2011",
+    "role": "Owner"
+  },
+  "rahul": {
+    "password": "rahulpass",
+    "role": "Waiter"
+  },
+  "neha": {
+    "password": "nehapass",
+    "role": "Receptionist"
+  },
+  "chef": {
+    "password": "kitchen123",
+    "role": "Kitchen"
+  }
+}
