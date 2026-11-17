@@ -127,7 +127,9 @@ document.addEventListener("DOMContentLoaded", () => {
   setupPOFilter();
   document.addEventListener("keydown", e => {
     if (e.key === "Escape") {
-      const open = [...document.querySelectorAll(".modal-backdrop.open")].pop();
+      // Close the top-most popup (highest z-index), e.g. the UPI QR over the bill
+      const open = [...document.querySelectorAll(".modal-backdrop.open")]
+        .sort((x, y) => (parseInt(x.style.zIndex, 10) || 0) - (parseInt(y.style.zIndex, 10) || 0)).pop();
       if (open) {
         if (open.id === "bill-modal") closeBillModal();
         else closeModal(open.id);
@@ -213,10 +215,11 @@ async function startApp(username, role) {
 
   await loadPublicSettings();
   applyRolePermissions();
-  await loadData();
-
+  // Show the first screen straight away; the menu loads alongside it
   const fromHash = (location.hash || "").replace("#", "");
   switchAdminTab(allowedTabs().includes(fromHash) ? fromHash : allowedTabs()[0]);
+  await loadData();
+  if (activeTab === "items" || activeTab === "categories") TABS[activeTab].onOpen();
   startOrdersPolling();
   if (allowedTabs().includes("purchasing")) refreshPOBadge();
 }
@@ -237,6 +240,7 @@ const TABS = {
   dashboard:  { section: "sec-dashboard",     title: "Dashboard",        roles: ["Admin", "Owner"],                                 onOpen: () => window.loadDashboard && loadDashboard() },
   orders:     { section: "sec-table-orders",  title: "Table Orders",     roles: ["Admin", "Owner", "Receptionist", "Waiter"],       onOpen: () => { renderTablesGrid(); loadAdminTableOrders(); } },
   invoices:   { section: "sec-invoices",      title: "Sales Invoices",   roles: ["Admin", "Owner", "Receptionist"],                 onOpen: () => loadHistoricalInvoices() },
+  customers:  { section: "sec-customers",     title: "Customers",        roles: ["Admin", "Owner", "Receptionist"],                 onOpen: () => loadCustomers() },
   items:      { section: "sec-items",         title: "Menu Items",       roles: ["Admin", "Owner", "Receptionist", "Waiter"],       onOpen: () => renderAdminItems() },
   categories: { section: "sec-categories",    title: "Categories",       roles: ["Admin", "Owner"],                                 onOpen: () => renderAdminCategories() },
   inventory:  { section: "sec-inventory",     title: "BOM & Inventory",  roles: ["Admin", "Owner", "Receptionist"], needsBom: true, onOpen: () => loadInventory() },
@@ -746,7 +750,7 @@ function renderUsersTable() {
     return `<tr>
       <td data-label="Username" class="strong"><span><i class="fas fa-circle-user" style="color:var(--faint);margin-right:6px;"></i>${escapeHTML(name)}${isMe ? ' <span class="badge">You</span>' : ""}</span></td>
       <td data-label="Role"><span class="badge ${ROLE_BADGE[role] || ""}">${escapeHTML(role)}</span></td>
-      <td data-label="Password" class="muted"><i class="fas fa-lock" style="margin-right:4px;"></i>Encrypted</td>
+      <td data-label="Password" class="muted"><i class="fas fa-lock" style="margin-right:4px;"></i>Hashed (bcrypt)</td>
       <td class="actions">
         <button class="btn btn-secondary btn-sm" onclick="editUserProfile('${jsArg(name)}')"><i class="fas fa-pen"></i> Edit</button>
         ${isMe ? "" : `<button class="btn btn-danger-soft btn-sm" onclick="deleteUserProfile('${jsArg(name)}')" aria-label="Delete"><i class="fas fa-trash"></i></button>`}
@@ -917,9 +921,10 @@ function renderTablesGrid() {
   container.innerHTML = tableNumbers().map(no => {
     const s = activeOrdersList[`table_${no}`];
     const busy = s && s.orders && s.orders.length > 0;
+    const seated = !!s && !busy;
     const bill = s && s.status === "Checkout Requested";
-    const cls = bill ? "is-bill" : busy ? "is-active" : "";
-    const label = bill ? "Bill" : busy ? "Dining" : "Free";
+    const cls = bill ? "is-bill" : (busy || seated) ? "is-active" : "";
+    const label = bill ? "Bill" : busy ? "Dining" : seated ? "Seated" : "Free";
     return `<button type="button" class="table-tile ${cls} ${selectedAdminTableNo === no ? "is-selected" : ""}" onclick="selectTable('${jsArg(no)}')" aria-label="Table ${escapeHTML(no)}, ${label}">
       <div class="no">${escapeHTML(no)}</div><div class="st">${label}</div>
     </button>`;
@@ -940,7 +945,7 @@ function showTableDetail(tableNo) {
   const content = document.getElementById("table-detail-content");
   const session = activeOrdersList[`table_${tableNo}`];
 
-  if (!session || !session.orders || !session.orders.length) {
+  if (!session) {
     content.classList.add("hidden");
     empty.classList.remove("hidden");
     empty.innerHTML = `<i class="fas fa-chair"></i><h4>Table ${escapeHTML(tableNo)} is free</h4>
@@ -955,15 +960,23 @@ function showTableDetail(tableNo) {
   document.getElementById("detail-guest-line").innerHTML =
     `<span><i class="fas fa-user"></i>${escapeHTML(session.customer_name || "Guest")}</span>` +
     (session.customer_phone ? `<span><i class="fas fa-phone"></i>${escapeHTML(session.customer_phone)}</span>` : "") +
-    `<span><i class="fas fa-layer-group"></i>${session.orders.length} round${session.orders.length > 1 ? "s" : ""}</span>`;
-  document.getElementById("btn-generate-bill").classList.toggle("hidden", currentRole() === "Waiter");
+    `<span><i class="fas fa-layer-group"></i>${session.orders.length} round${session.orders.length > 1 ? "s" : ""}</span>` +
+    (session.pin ? `<span title="Guests at this table can join the bill with this PIN"><span class="pin-chip"><i class="fas fa-key"></i>PIN ${escapeHTML(session.pin)}</span></span>` : "");
+  const role = currentRole();
+  document.getElementById("btn-generate-bill").classList.toggle("hidden", role === "Waiter");
+  document.getElementById("btn-close-table").classList.toggle("hidden", !["Admin", "Owner"].includes(role));
+  const canVoid = ["Admin", "Owner", "Receptionist"].includes(role);
 
+  document.getElementById("btn-generate-bill").classList.toggle("hidden", role === "Waiter" || !session.orders.length);
   let running = 0;
-  document.getElementById("detail-rounds-container").innerHTML = session.orders.map((round, idx) => {
-    const lines = (round.items || []).map(i => {
+  document.getElementById("detail-rounds-container").innerHTML = session.orders.length ? "" :
+    `<div class="empty" style="padding:24px;"><i class="fas fa-user-clock"></i><h4>Seated — no orders yet</h4><p>${escapeHTML(session.customer_name || "A guest")} opened this table at ${formatTime(session.started_at)}. If they left without ordering, use <b>Close table</b> to free it.</p></div>`;
+  document.getElementById("detail-rounds-container").innerHTML += session.orders.map((round, idx) => {
+    const lines = (round.items || []).map((i, li) => {
       const line = (Number(i.price) || 0) * (Number(i.quantity) || 0);
       running += line;
-      return `<div class="round-line"><span><span class="qty">${escapeHTML(i.quantity)}×</span>${escapeHTML(i.name)} <span class="var">· ${escapeHTML(i.variant)}</span></span><span class="nowrap">${inr(line)}</span></div>`;
+      const voidBtn = canVoid ? `<button class="void-btn" title="Void this item" aria-label="Void ${escapeHTML(i.name)}" onclick="voidItem('${jsArg(tableNo)}', '${jsArg(round.order_id)}', ${li}, ${Number(i.quantity) || 1}, '${jsArg(i.name)}')"><i class="fas fa-ban"></i></button>` : "";
+      return `<div class="round-line"><span><span class="qty">${escapeHTML(i.quantity)}×</span>${escapeHTML(i.name)} <span class="var">· ${escapeHTML(i.variant)}</span></span><span class="nowrap">${inr(line)}${voidBtn}</span></div>`;
     }).join("");
     const statuses = ["Received", "Preparing", "Ready", "Served"];
     return `<div class="round">
@@ -976,7 +989,35 @@ function showTableDetail(tableNo) {
       ${lines}
     </div>`;
   }).join("");
-  document.getElementById("detail-running-total").textContent = inr(running);
+  document.getElementById("detail-running-total").textContent = inr(session.bill_total != null ? session.bill_total : running);
+}
+
+function voidItem(tableNo, orderId, index, qty, name) {
+  let n = 1;
+  if (qty > 1) {
+    const ans = prompt(`Void how many of "${name}"? (1–${qty})`, String(qty));
+    if (ans === null) return;
+    n = Math.max(1, Math.min(qty, parseInt(ans, 10) || 0));
+    if (!n) return;
+  }
+  const reason = prompt(`Reason for voiding ${n} × ${name}:`, "");
+  if (reason === null) return;
+  if (!reason.trim()) { window.showToast("A reason is required to void an item.", "error"); return; }
+  api("/api/orders/void-item", { method: "POST", body: { table_no: tableNo, order_id: orderId, index, qty: n, reason: reason.trim() } })
+    .then(() => { window.showToast(`Voided ${n} × ${name}.`, "info"); loadAdminTableOrders(); })
+    .catch(err => window.showToast(err.message, "error"));
+}
+
+function closeTableNoBill() {
+  const no = selectedAdminTableNo;
+  const s = activeOrdersList[`table_${no}`];
+  if (!s) return;
+  const reason = prompt(`Close Table ${no} WITHOUT a bill?\n\nUse this only for walk-outs, test orders or a table that was left open by mistake. Any items on it are voided and this is recorded in the audit log.\n\nReason:`, "");
+  if (reason === null) return;
+  if (!reason.trim()) { window.showToast("A reason is required.", "error"); return; }
+  api("/api/orders/close-table", { method: "POST", body: { table_no: no, reason: reason.trim() } })
+    .then(() => { window.showToast(`Table ${no} closed — it's free for the next guests.`, "info"); selectedAdminTableNo = null; showTableDetail(no); loadAdminTableOrders(); })
+    .catch(err => window.showToast(err.message, "error"));
 }
 
 function updateAdminOrderStatus(tableNo, orderId, status) {
@@ -995,41 +1036,52 @@ let payments = [];                // [{label, method, amount, reference}]
 
 const METHOD_ICONS = { UPI: "fa-qrcode", Cash: "fa-money-bill-wave", Card: "fa-credit-card" };
 
-function computeBill(session) {
-  const map = new Map();
-  let subtotal = 0;
-  session.orders.forEach(round => (round.items || []).forEach(i => {
-    const key = `${i.id || i.name}||${i.variant}`;
-    subtotal += (Number(i.price) || 0) * (Number(i.quantity) || 0);
-    if (map.has(key)) map.get(key).quantity += Number(i.quantity) || 0;
-    else map.set(key, { ...i, quantity: Number(i.quantity) || 0 });
-  }));
-  subtotal = round2(subtotal);
-  const service_charge = round2(subtotal * 0.10);
-  const tax = round2(subtotal * 0.05);
-  return { items: [...map.values()], subtotal, service_charge, tax, total: round2(subtotal + service_charge + tax) };
-}
-
+// Draws the receipt from a bill computed by the server (same maths as the invoice)
 function fillReceipt(r, opts) {
-  document.getElementById("bill-biz-name").textContent = publicSettings.business_name || "Receipt";
-  document.getElementById("bill-biz-addr").textContent = [publicSettings.business_address, publicSettings.business_phone, publicSettings.gstin ? `GSTIN ${publicSettings.gstin}` : ""].filter(Boolean).join(" · ");
+  const seller = r.seller || {};
+  document.getElementById("bill-biz-name").textContent = seller.name || publicSettings.business_name || "Receipt";
+  const gstin = seller.gstin || publicSettings.gstin;
+  document.getElementById("bill-biz-addr").textContent = [seller.address || publicSettings.business_address, seller.phone || publicSettings.business_phone, gstin ? `GSTIN ${gstin}` : ""].filter(Boolean).join(" · ");
   const meta = [
-    ["Invoice", opts.invoiceId || "Draft — not yet paid"],
+    [opts.invoiceNo ? "Invoice no." : "Bill", opts.invoiceNo || "Draft — not yet paid"],
     ["Table", r.table_no],
     ["Guest", r.customer_name || "Guest"],
     ["Phone", r.customer_phone || "—"],
     ["Date", opts.date],
   ];
-  document.getElementById("bill-meta-info").innerHTML = meta.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHTML(v)}</dd>`).join("");
+  if (opts.invoiceNo) meta.push(["SAC", seller.sac || publicSettings.sac_code || "996331"]);
+  document.getElementById("bill-meta-info").innerHTML =
+    (opts.invoiceNo ? `<div class="receipt-title" style="grid-column:1/-1;">TAX INVOICE</div>` : "") +
+    meta.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHTML(v)}</dd>`).join("");
   document.getElementById("bill-items-list").innerHTML = (r.items || []).map(it => `
     <div class="receipt-line">
-      <div class="n">${escapeHTML(it.name)} × ${escapeHTML(it.quantity)}<small>${escapeHTML(it.variant)} · ${inr(it.price)} each</small></div>
+      <div class="n">${escapeHTML(it.name)} × ${escapeHTML(it.quantity)}<small>${escapeHTML(it.variant)} · ${inr(it.price)} each${it.tax_class === "liquor" ? " · liquor" : ""}</small></div>
       <div class="nowrap">${inr(it.price * it.quantity)}</div>
     </div>`).join("");
-  document.getElementById("bill-subtotal").textContent = inr(r.subtotal);
-  document.getElementById("bill-service-charge").textContent = inr(r.service_charge);
-  document.getElementById("bill-tax").textContent = inr(r.tax);
-  document.getElementById("bill-grand-total").textContent = inr(r.total);
+
+  const rows = [["Subtotal", inr(r.subtotal)]];
+  if (r.discount > 0) {
+    const d = r.discount_info || {};
+    rows.push([`Discount${d.type === "pct" ? ` ${d.value}%` : ""}${d.reason ? ` (${escapeHTML(d.reason)})` : ""}`, "− " + inr(r.discount), "discount"]);
+  }
+  if (r.service_charge_percent > 0 && r.service_charge > 0) rows.push([`Service charge ${r.service_charge_percent}%`, inr(r.service_charge)]);
+  else if (r.service_charge_on === false) rows.push(["Service charge (removed)", inr(0), "sub"]);
+  if (r.cgst != null) {
+    if (r.food_taxable > 0) {
+      rows.push([`Food taxable value`, inr(r.food_taxable), "sub"]);
+      rows.push([`CGST ${r.gst_percent / 2}%`, inr(r.cgst)]);
+      rows.push([`SGST ${r.gst_percent / 2}%`, inr(r.sgst)]);
+    }
+    if (r.liquor_taxable > 0) {
+      rows.push([`Liquor taxable value`, inr(r.liquor_taxable), "sub"]);
+      rows.push([`VAT on liquor ${r.liquor_vat_percent}%`, inr(r.vat)]);
+    }
+    if (Math.abs(r.round_off || 0) > 0.001) rows.push(["Round off", inr(r.round_off)]);
+  } else {
+    rows.push(["Taxes", inr(r.tax)]);   // invoices from before the tax breakdown
+  }
+  rows.push(["Grand total", inr(r.total), "total"]);
+  document.getElementById("bill-sum").innerHTML = rows.map(([k, v, c]) => `<div class="row ${c || ""}"><span>${k}</span><span>${v}</span></div>`).join("");
 
   const paid = document.getElementById("bill-paid-lines");
   if (opts.payments && opts.payments.length) {
@@ -1039,12 +1091,13 @@ function fillReceipt(r, opts) {
   } else {
     paid.classList.add("hidden");
   }
+  document.getElementById("bill-foot").textContent = opts.invoiceNo
+    ? "Thank you for dining with us! Service charge is optional."
+    : "Draft bill — charges can still change before payment.";
 }
 
-function checkoutTable() {
-  const session = activeOrdersList[`table_${selectedAdminTableNo}`];
-  if (!session) return;
-  const bill = computeBill(session);
+function applyBill(bill) {
+  const session = activeOrdersList[`table_${selectedAdminTableNo}`] || {};
   currentCheckoutBill = { table_no: selectedAdminTableNo, ...bill };
   activeReceiptObject = {
     invoice_id: `BILL-T${selectedAdminTableNo}-${Date.now()}`,
@@ -1054,13 +1107,79 @@ function checkoutTable() {
     ...bill
   };
   fillReceipt(activeReceiptObject, { date: formatDateTime(new Date().toISOString()) });
+  document.getElementById("sc-pct-label").textContent = publicSettings.service_charge_percent ? `(${publicSettings.service_charge_percent}%)` : "";
+  document.getElementById("bill-sc-toggle").checked = !!bill.service_charge_on;
+  document.getElementById("bill-sc-toggle").disabled = !(publicSettings.service_charge_percent > 0);
+  const dc = document.getElementById("disc-current");
+  if (bill.discount > 0 && bill.discount_info) {
+    const d = bill.discount_info;
+    dc.innerHTML = `<span><i class="fas fa-tag"></i> ${d.type === "pct" ? d.value + "% off" : inr(d.value) + " off"} — ${escapeHTML(d.reason)} (${inr(bill.discount)})</span><button type="button" class="btn btn-ghost btn-sm" onclick="removeDiscount()">Remove</button>`;
+    dc.classList.remove("hidden");
+  } else {
+    dc.classList.add("hidden");
+  }
+}
 
-  document.getElementById("bill-modal-title").textContent = `Table ${selectedAdminTableNo} · Bill & payment`;
-  document.getElementById("bill-layout").classList.remove("view-only");
-  document.getElementById("pay-panel").classList.remove("hidden");
-  document.getElementById("btn-settle-action").classList.remove("hidden");
-  resetPayments(1);
-  openModal("bill-modal");
+function checkoutTable() {
+  if (!activeOrdersList[`table_${selectedAdminTableNo}`]) return;
+  // Fresh settings each time (UPI ID, payment methods, charges may have changed)
+  loadPublicSettings()
+    .then(() => api(`/api/orders/bill-preview?table=${encodeURIComponent(selectedAdminTableNo)}`))
+    .then(bill => {
+      applyBill(bill);
+      document.getElementById("disc-value").value = "";
+      document.getElementById("disc-reason").value = "";
+      document.getElementById("bill-modal-title").textContent = `Table ${selectedAdminTableNo} · Bill & payment`;
+      document.getElementById("bill-layout").classList.remove("view-only");
+      document.getElementById("pay-panel").classList.remove("hidden");
+      document.getElementById("btn-settle-action").classList.remove("hidden");
+      resetPayments(1);
+      openModal("bill-modal");
+    })
+    .catch(err => window.showToast(err.message, "error"));
+}
+
+// Service charge on/off and discounts are saved on the table, so the guest's
+// phone and the final invoice show exactly the same amount.
+function adjustBill(body) {
+  return api("/api/orders/adjust", { method: "POST", body: Object.assign({ table_no: selectedAdminTableNo }, body) })
+    .then(res => {
+      applyBill(res.bill);
+      resetPayments(payments.length || 1);
+      loadAdminTableOrders(true);
+    })
+    .catch(err => { window.showToast(err.message, "error"); checkoutTable(); });
+}
+
+function setServiceCharge(on) {
+  adjustBill({ service_charge_on: on }).then(() => window.showToast(on ? "Service charge added." : "Service charge removed.", "info"));
+}
+
+function applyDiscount() {
+  const type = document.getElementById("disc-type").value;
+  const value = parseFloat(document.getElementById("disc-value").value);
+  const reason = document.getElementById("disc-reason").value.trim();
+  if (!(value > 0)) { window.showToast("Enter a discount amount.", "error"); return; }
+  if (!reason) { window.showToast("Enter a reason for the discount.", "error"); document.getElementById("disc-reason").focus(); return; }
+  adjustBill({ discount: { type, value, reason } }).then(() => window.showToast("Discount applied.", "success"));
+}
+
+function removeDiscount() {
+  adjustBill({ discount: null }).then(() => window.showToast("Discount removed.", "info"));
+}
+
+function showUPIQR(i) {
+  const p = payments[i];
+  if (!publicSettings.upi_id) {
+    window.showToast("Add your UPI ID in Settings first.", "warning");
+    return;
+  }
+  const link = window.UPI.link(publicSettings.upi_id, publicSettings.upi_name, p.amount, `Table ${selectedAdminTableNo} ${p.label}`);
+  document.getElementById("upi-modal-amount").textContent = inr(p.amount);
+  document.getElementById("upi-modal-payee").textContent = publicSettings.upi_name || publicSettings.business_name;
+  document.getElementById("upi-modal-id").textContent = publicSettings.upi_id;
+  window.UPI.renderQR(document.getElementById("upi-modal-qr"), link, 260);
+  openModal("upi-modal");
 }
 
 function closeBillModal() {
@@ -1096,6 +1215,7 @@ function renderPaymentRows() {
       <div class="seg" role="radiogroup" aria-label="Payment method for ${escapeHTML(p.label)}">
         ${methods.map(m => `<button type="button" role="radio" aria-checked="${p.method === m}" class="${p.method === m ? "active" : ""}" onclick="setPaymentMethod(${i}, '${jsArg(m)}')"><i class="fas ${METHOD_ICONS[m] || "fa-wallet"}"></i> ${escapeHTML(m)}</button>`).join("")}
       </div>
+      ${p.method === "UPI" && publicSettings.upi_id ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="showUPIQR(${i})"><i class="fas fa-qrcode"></i> Show UPI QR to guest</button>` : ""}
       ${p.method && p.method !== "Cash" ? `<div class="pay-ref"><input type="text" class="input" maxlength="40" placeholder="${p.method === "UPI" ? "UPI transaction ID (optional)" : "Card last 4 digits / approval code (optional)"}" value="${escapeHTML(p.reference)}" oninput="payments[${i}].reference=this.value"></div>` : ""}
     </div>`).join("");
   updatePaymentSummary();
@@ -1188,11 +1308,11 @@ function confirmBillCheckout() {
       // Switch the modal to show the final, paid receipt
       currentCheckoutBill = null;
       activeReceiptObject = inv;
-      fillReceipt(inv, { invoiceId: inv.invoice_id, date: formatDateTime(inv.timestamp), payments: inv.payments });
+      fillReceipt(inv, { invoiceNo: inv.invoice_no || inv.invoice_id, date: formatDateTime(inv.timestamp), payments: inv.payments });
       document.getElementById("bill-layout").classList.add("view-only");
       document.getElementById("pay-panel").classList.add("hidden");
       document.getElementById("btn-settle-action").classList.add("hidden");
-      document.getElementById("bill-modal-title").textContent = `Paid · ${inv.invoice_id}`;
+      document.getElementById("bill-modal-title").textContent = `Paid · ${inv.invoice_no || inv.invoice_id}`;
       selectedAdminTableNo = null;
       document.getElementById("table-detail-content").classList.add("hidden");
       const empty = document.getElementById("table-detail-empty-state");
@@ -1235,7 +1355,7 @@ function renderInvoicesTable(list) {
     return;
   }
   tbody.innerHTML = list.map(inv => `<tr>
-      <td data-label="Invoice" class="mono" style="font-size:12px;color:var(--primary);font-weight:600;">${escapeHTML(inv.invoice_id)}</td>
+      <td data-label="Invoice no." class="mono" style="font-size:12px;color:var(--primary);font-weight:600;">${escapeHTML(inv.invoice_no || inv.invoice_id)}</td>
       <td data-label="Date" class="muted nowrap" style="font-size:13px;">${formatDateTime(inv.timestamp)}</td>
       <td data-label="Table"><span class="badge">T-${escapeHTML(inv.table_no)}</span></td>
       <td data-label="Guest">${escapeHTML(inv.customer_name || "Guest")}</td>
@@ -1251,7 +1371,7 @@ function filterHistoricalInvoices() {
   const q = document.getElementById("invoice-search-input").value.trim().toLowerCase();
   if (!q) return renderInvoicesTable(historicalInvoices);
   renderInvoicesTable(historicalInvoices.filter(inv =>
-    (inv.invoice_id || "").toLowerCase().includes(q) ||
+    (inv.invoice_id || "").toLowerCase().includes(q) || (inv.invoice_no || "").toLowerCase().includes(q) ||
     `table ${inv.table_no}`.includes(q) || String(inv.table_no) === q ||
     (inv.customer_name || "").toLowerCase().includes(q) ||
     (inv.payment_mode || "").toLowerCase().includes(q)
@@ -1263,8 +1383,8 @@ function viewHistoricalInvoiceDetails(invoiceId) {
   if (!inv) return;
   currentCheckoutBill = null;
   activeReceiptObject = inv;
-  fillReceipt(inv, { invoiceId: inv.invoice_id, date: formatDateTime(inv.timestamp), payments: inv.payments });
-  document.getElementById("bill-modal-title").textContent = `Invoice · ${inv.invoice_id}`;
+  fillReceipt(inv, { invoiceNo: inv.invoice_no || inv.invoice_id, date: formatDateTime(inv.timestamp), payments: inv.payments });
+  document.getElementById("bill-modal-title").textContent = `Invoice · ${inv.invoice_no || inv.invoice_id}`;
   document.getElementById("bill-layout").classList.add("view-only");
   document.getElementById("pay-panel").classList.add("hidden");
   document.getElementById("btn-settle-action").classList.add("hidden");
@@ -1284,7 +1404,7 @@ function downloadInvoicePDF() {
   const el = document.getElementById("bill-receipt");
   html2pdf().set({
     margin: 0.3,
-    filename: `${activeReceiptObject.invoice_id}.pdf`,
+    filename: `${(activeReceiptObject.invoice_no || activeReceiptObject.invoice_id).replace(/\//g, "-")}.pdf`,
     image: { type: "jpeg", quality: 0.98 },
     html2canvas: { scale: 2, backgroundColor: "#ffffff", logging: false },
     jsPDF: { unit: "in", format: "a5", orientation: "portrait" }
@@ -1628,7 +1748,15 @@ function loadSettings() {
       document.getElementById("set-bom-enabled").checked = !!s.bom_enabled;
       document.getElementById("set-bom-deduct").value = s.bom_deduct_on || "order";
       document.getElementById("set-bom-block").checked = !!s.block_on_low_stock;
+      document.getElementById("set-sc-pct").value = s.service_charge_percent;
+      document.getElementById("set-gst-pct").value = s.gst_percent;
+      document.getElementById("set-vat-pct").value = s.liquor_vat_percent;
+      document.getElementById("set-inv-prefix").value = s.invoice_prefix || "INV";
+      document.getElementById("set-sac").value = s.sac_code || "";
+      document.getElementById("set-upi-id").value = s.upi_id || "";
+      document.getElementById("set-upi-name").value = s.upi_name || "";
       refreshBomSettingState();
+      previewSettingsQR();
     })
     .catch(err => window.showToast(err.message, "error"));
 }
@@ -1657,6 +1785,13 @@ function saveSettings(e) {
     bom_enabled: document.getElementById("set-bom-enabled").checked,
     bom_deduct_on: document.getElementById("set-bom-deduct").value,
     block_on_low_stock: document.getElementById("set-bom-block").checked,
+    service_charge_percent: parseFloat(document.getElementById("set-sc-pct").value) || 0,
+    gst_percent: parseFloat(document.getElementById("set-gst-pct").value) || 0,
+    liquor_vat_percent: parseFloat(document.getElementById("set-vat-pct").value) || 0,
+    invoice_prefix: document.getElementById("set-inv-prefix").value.trim(),
+    sac_code: document.getElementById("set-sac").value.trim(),
+    upi_id: document.getElementById("set-upi-id").value.trim(),
+    upi_name: document.getElementById("set-upi-name").value.trim(),
   };
   if (!body.payment_methods.UPI && !body.payment_methods.Cash && !body.payment_methods.Card) {
     window.showToast("Keep at least one payment method turned on.", "error");
@@ -2191,4 +2326,145 @@ function printPO(id) {
 function goLowStockPO() {
   switchAdminTab("purchasing");
   loadPurchasing().then(createPOFromLowStock);
+}
+
+function previewSettingsQR() {
+  const id = document.getElementById("set-upi-id").value.trim();
+  const name = document.getElementById("set-upi-name").value.trim() || document.getElementById("set-business-name").value.trim();
+  const box = document.getElementById("upi-preview");
+  const pfx = (document.getElementById("set-inv-prefix").value.trim().toUpperCase() || "INV");
+  const y = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+  document.getElementById("inv-no-example").textContent = `e.g. ${pfx}/${String(y).slice(2)}-${String(y + 1).slice(2)}/00001`;
+  if (!/^[a-z0-9.\-_]{2,256}@[a-z][a-z0-9]{2,64}$/i.test(id)) {
+    box.innerHTML = id ? '<span style="color:var(--warning-700);font-size:13px;">That doesn\'t look like a UPI ID yet (name@bank).</span>' : '<span class="muted">Enter a UPI ID to see the QR guests will scan.</span>';
+    return;
+  }
+  box.innerHTML = '<div id="upi-preview-qr"></div><div style="font-size:13px;"><b>Preview</b><br>Guests scan this to pay ' + escapeHTML(name || id) + '.<br><span class="muted">At checkout the QR also carries the exact bill amount.</span></div>';
+  if (window.UPI) window.UPI.renderQR(document.getElementById("upi-preview-qr"), window.UPI.link(id, name, 0, "Test"), 130);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Audit log integrity
+   ════════════════════════════════════════════════════════════════════════ */
+
+function verifyAuditLog() {
+  const box = document.getElementById("audit-verify-result");
+  api("/api/audit-log/verify")
+    .then(r => {
+      box.classList.remove("hidden");
+      if (r.ok) {
+        box.className = "notice";
+        box.innerHTML = `<i class="fas fa-shield-halved"></i><div><b>Log intact.</b> ${r.checked} entries checked — none have been edited or removed.${r.legacy ? ` (${r.legacy} older entries were written before protection was added.)` : ""}</div>`;
+      } else {
+        box.className = "notice warn";
+        box.innerHTML = `<i class="fas fa-triangle-exclamation"></i><div><b>Warning: the audit log has been tampered with</b> near the entry from ${formatDateTime(r.broken.timestamp)}. Entries were edited or deleted outside the app.</div>`;
+      }
+    })
+    .catch(err => window.showToast(err.message, "error"));
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Customers (one per mobile number)
+   ════════════════════════════════════════════════════════════════════════ */
+
+let customers = [];
+
+function loadCustomers() {
+  const tbody = document.getElementById("customers-tbody");
+  tbody.innerHTML = emptyRow(7, '<i class="fas fa-spinner fa-spin"></i> Loading…');
+  api("/api/customers")
+    .then(list => { customers = Array.isArray(list) ? list : []; renderCustomerStats(); renderCustomers(); })
+    .catch(err => { tbody.innerHTML = emptyRow(7, escapeHTML(err.message)); });
+}
+
+function renderCustomerStats() {
+  const repeat = customers.filter(c => c.visits > 1).length;
+  const monthKey = new Date().toISOString().slice(0, 7);
+  const newThisMonth = customers.filter(c => (c.first_seen || "").slice(0, 7) === monthKey).length;
+  const spend = customers.reduce((s, c) => s + (Number(c.total_spent) || 0), 0);
+  const cards = [
+    { icon: "fa-address-book", label: "Customers", value: customers.length, fg: "#2f5d5c", bg: "#e7efee" },
+    { icon: "fa-rotate-left", label: "Returning guests", value: repeat, fg: "#3f7cac", bg: "#e3eef7" },
+    { icon: "fa-user-plus", label: "New this month", value: newThisMonth, fg: "#4f9d69", bg: "#e4f3e9" },
+    { icon: "fa-indian-rupee-sign", label: "Avg spend / customer", value: inr(customers.length ? Math.round(spend / customers.length) : 0), fg: "#d97e4a", bg: "#fbeee5" },
+  ];
+  document.getElementById("customer-stats").innerHTML = cards.map(c => `
+    <div class="stat-card"><div class="stat-icon" style="background:${c.bg};color:${c.fg};"><i class="fas ${c.icon}"></i></div>
+    <div style="min-width:0;"><div class="stat-value">${c.value}</div><div class="stat-label">${c.label}</div></div></div>`).join("");
+}
+
+function renderCustomers() {
+  const tbody = document.getElementById("customers-tbody");
+  const q = (document.getElementById("customer-search").value || "").trim().toLowerCase();
+  const list = customers.filter(c => !q || (c.name || "").toLowerCase().includes(q) || (c.phone || "").includes(q.replace(/\D/g, "") || "@@"));
+  if (!list.length) {
+    tbody.innerHTML = emptyRow(7, customers.length ? "No customers match your search." : "No customers yet. Guests are added automatically when they enter their name and mobile number at the table.");
+    return;
+  }
+  tbody.innerHTML = list.slice(0, 500).map(c => `<tr>
+    <td data-label="Customer" class="strong"><span>${escapeHTML(c.name)}${c.visits > 1 ? ' <span class="badge badge-primary">Regular</span>' : ""}</span></td>
+    <td data-label="Mobile"><span class="mono" style="font-size:13px;">${escapeHTML(c.phone)}</span></td>
+    <td data-label="Visits">${c.visits}</td>
+    <td data-label="Bills">${c.invoices}</td>
+    <td data-label="Total spent" class="amount">${inr(c.total_spent)}</td>
+    <td data-label="Last visit" class="muted nowrap" style="font-size:13px;">${formatDate(c.last_seen)}</td>
+    <td class="actions"><button class="btn btn-secondary btn-sm" onclick="openCustomer('${jsArg(c.phone)}')"><i class="fas fa-clock-rotate-left"></i> History</button></td>
+  </tr>`).join("");
+}
+
+function openCustomer(phone) {
+  api(`/api/customers/detail?phone=${encodeURIComponent(phone)}`)
+    .then(d => {
+      const c = d.customer;
+      document.getElementById("customer-modal-title").textContent = c.name;
+      const fav = d.favourites.length
+        ? `<div class="chip-list">${d.favourites.map(f => `<span class="badge badge-warning">${escapeHTML(f.name)} × ${f.qty}</span>`).join("")}</div>`
+        : '<span class="muted" style="font-size:13px;">No orders yet.</span>';
+      const rows = d.invoices.map(inv => `<tr>
+        <td data-label="Date" class="nowrap" style="font-size:13px;">${formatDateTime(inv.timestamp)}</td>
+        <td data-label="Invoice" class="mono" style="font-size:12px;">${escapeHTML(inv.invoice_no || inv.invoice_id)}</td>
+        <td data-label="Table">T-${escapeHTML(inv.table_no)}</td>
+        <td data-label="Items" style="font-size:13px;">${inv.items.map(i => `${i.quantity}× ${escapeHTML(i.name)}`).join(", ")}</td>
+        <td data-label="Total" class="amount">${inr(inv.total)}</td>
+        <td data-label="Paid by">${paymentBadges(inv)}</td>
+      </tr>`).join("");
+      document.getElementById("customer-modal-body").innerHTML = `
+        ${d.open_table ? `<div class="notice"><i class="fas fa-chair"></i><div>Dining now at <b>Table ${escapeHTML(d.open_table.table_no)}</b> (since ${formatTime(d.open_table.since)}).</div></div>` : ""}
+        <div class="cust-kpis">
+          <div><b class="mono">${escapeHTML(c.phone)}</b><span>Mobile</span></div>
+          <div><b>${c.visits}</b><span>Visits</span></div>
+          <div><b>${inr(c.total_spent)}</b><span>Total spent</span></div>
+          <div><b>${inr(c.invoices ? c.total_spent / c.invoices : 0)}</b><span>Average bill</span></div>
+          <div><b>${formatDate(c.first_seen)}</b><span>First visit</span></div>
+          <div><b>${formatDate(c.last_seen)}</b><span>Last visit</span></div>
+        </div>
+        <div class="form-grid" style="margin-bottom:18px;">
+          <div class="field"><label for="cust-name">Name</label><input type="text" class="input" id="cust-name" maxlength="40" value="${escapeHTML(c.name)}"></div>
+          <div class="field" style="grid-column:span 2;"><label for="cust-notes">Notes</label><input type="text" class="input" id="cust-notes" maxlength="300" value="${escapeHTML(c.notes || "")}" placeholder="e.g. Prefers window table, allergic to nuts"></div>
+        </div>
+        <h4 style="font-size:14px;margin-bottom:8px;">Favourites</h4>${fav}
+        <h4 style="font-size:14px;margin:18px 0 8px;">Past orders (${d.invoices.length})</h4>
+        <div class="card" style="margin-bottom:0;"><div class="table-wrap cards"><table class="table responsive">
+          <thead><tr><th>Date</th><th>Invoice</th><th>Table</th><th>Items</th><th>Total</th><th>Paid by</th></tr></thead>
+          <tbody>${rows || emptyRow(6, "No bills yet.")}</tbody></table></div></div>`;
+      document.getElementById("customer-modal-actions").innerHTML =
+        (currentRole() === "Admin" ? `<button class="btn btn-danger-soft" onclick="deleteCustomer('${jsArg(c.phone)}')"><i class="fas fa-user-xmark"></i> Delete profile</button>` : "") +
+        `<button class="btn btn-secondary" onclick="closeModal('customer-modal')">Close</button>
+         <button class="btn btn-primary" onclick="saveCustomer('${jsArg(c.phone)}')"><i class="fas fa-floppy-disk"></i> Save</button>`;
+      openModal("customer-modal");
+    })
+    .catch(err => window.showToast(err.message, "error"));
+}
+
+function saveCustomer(phone) {
+  api("/api/customers", { method: "POST", body: { action: "save", phone, name: document.getElementById("cust-name").value.trim(), notes: document.getElementById("cust-notes").value.trim() } })
+    .then(() => { window.showToast("Customer saved.", "success"); closeModal("customer-modal"); loadCustomers(); })
+    .catch(err => window.showToast(err.message, "error"));
+}
+
+function deleteCustomer(phone) {
+  if (!confirm("Delete this customer's profile? Their past tax invoices are kept, as the law requires.")) return;
+  api("/api/customers", { method: "POST", body: { action: "delete", phone } })
+    .then(() => { window.showToast("Customer profile deleted.", "info"); closeModal("customer-modal"); loadCustomers(); })
+    .catch(err => window.showToast(err.message, "error"));
 }

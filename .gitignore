@@ -1,3 +1,23 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# Live data — stored outside the deploy folder (see data_dir() in api.php).
+# Never commit these: a Git deploy would overwrite the restaurant's real data.
+/data/
+/hms_data/
+/active_orders.json
+/invoices.json
+/menu_data.json
+/users.json
+/audit_log.json
+/sms_sent.json
+/settings.json
+/inventory.json
+/bom.json
+/stock_ledger.json
+/suppliers.json
+/purchase_orders.json
+/customers.json
+/login_attempts.json
+/client_errors.log

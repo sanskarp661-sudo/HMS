@@ -19,8 +19,16 @@ function dbMoney(n) {
   return "₹" + (Number(n) || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 }
 
+let dashWaits = 0;
 function loadDashboard() {
   const cards = document.getElementById("db-summary-cards");
+  if (typeof Chart === "undefined" && dashWaits < 20) {
+    // Chart library still downloading — show placeholders and try again shortly
+    dashWaits++;
+    cards.innerHTML = Array(6).fill('<div class="stat-card skeleton"></div>').join("");
+    setTimeout(loadDashboard, 300);
+    return;
+  }
   if (typeof Chart === "undefined") {
     cards.innerHTML = `<div class="notice warn" style="grid-column:1/-1;margin:0;"><i class="fas fa-triangle-exclamation"></i>
       <div><b>Charts could not load.</b> The dashboard needs an internet connection for its chart library. Check the connection and press Refresh.</div></div>`;
@@ -42,6 +50,7 @@ function loadDashboard() {
     get("/api/dashboard/payments"),
   ])
   .then(([summary, revenue, items, categories, hourly, payments]) => {
+    dashWaits = 0;
     renderSummaryCards(summary);
     renderRevenueChart(revenue);
     renderTopItems(items);
@@ -85,7 +94,22 @@ function baseScales(horizontal) {
   };
 }
 
+// Shows a friendly message over a chart that has nothing to plot
+function chartEmpty(canvasId, isEmpty, msg) {
+  const wrap = document.getElementById(canvasId).parentElement;
+  let note = wrap.querySelector(".chart-empty");
+  if (!note) {
+    note = document.createElement("div");
+    note.className = "chart-empty";
+    note.style.cssText = "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#6b7776;font-size:13px;padding:20px;pointer-events:none;";
+    wrap.appendChild(note);
+  }
+  note.textContent = msg;
+  note.style.display = isEmpty ? "flex" : "none";
+}
+
 function renderRevenueChart(data) {
+  chartEmpty("chart-revenue", !(data || []).some(d => d.revenue > 0), "No bills settled in the last 30 days yet.");
   const ctx = document.getElementById("chart-revenue").getContext("2d");
   if (chartRevenue) chartRevenue.destroy();
   chartRevenue = new Chart(ctx, {
@@ -110,6 +134,7 @@ function renderRevenueChart(data) {
 }
 
 function renderCategoryChart(data) {
+  chartEmpty("chart-category", !(data || []).length, "No sales to show yet.");
   const ctx = document.getElementById("chart-category").getContext("2d");
   if (chartCategory) chartCategory.destroy();
   const list = (data || []).slice(0, 8);
@@ -130,6 +155,7 @@ function renderCategoryChart(data) {
 }
 
 function renderPaymentsChart(data) {
+  chartEmpty("chart-payments", !(data || []).length, "No payments in the last 30 days yet.");
   const ctx = document.getElementById("chart-payments").getContext("2d");
   if (chartPayments) chartPayments.destroy();
   const list = data || [];
@@ -151,6 +177,7 @@ function renderPaymentsChart(data) {
 }
 
 function renderHourlyChart(data) {
+  chartEmpty("chart-hourly", !(data || []).some(d => d.orders > 0), "Busy hours appear once bills are settled.");
   const ctx = document.getElementById("chart-hourly").getContext("2d");
   if (chartHourly) chartHourly.destroy();
   chartHourly = new Chart(ctx, {

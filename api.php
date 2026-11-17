@@ -51,17 +51,52 @@ function get_staff_user() {
 $staff_user = get_staff_user();
 
 // ─── Helper Functions ────────────────────────────────────────────────────────
+// ─── Data storage ───────────────────────────────────────────────────────────
+// Live data (orders, invoices, menu edits, users, logs…) must NOT live inside
+// the Git-deployed folder: every Git deploy would reset it to the copy in the
+// repository. It is kept one level above the website folder ("hms_data"),
+// falling back to a protected "data" folder inside it.
+function data_dir() {
+    static $dir = null;
+    if ($dir !== null) return $dir;
+    $candidates = [dirname(__DIR__) . '/hms_data', __DIR__ . '/data'];
+    foreach ($candidates as $c) {
+        if ((is_dir($c) || @mkdir($c, 0750, true)) && is_writable($c)) {
+            if (!file_exists($c . '/.htaccess')) {
+                @file_put_contents($c . '/.htaccess', "Require all denied\nDeny from all\n");
+            }
+            if (!is_dir($c . '/uploads')) @mkdir($c . '/uploads', 0750, true);
+            $dir = $c;
+            return $dir;
+        }
+    }
+    $dir = __DIR__; // last resort: old behaviour
+    return $dir;
+}
+
+// Full path of a data file. The first time a file is needed it is copied from
+// the old location in the website folder (migration) or from data-seed/.
+function data_path($filename) {
+    $target = data_dir() . '/' . $filename;
+    if (!file_exists($target) && data_dir() !== __DIR__) {
+        foreach ([__DIR__ . '/' . $filename, __DIR__ . '/data-seed/' . $filename] as $src) {
+            if (file_exists($src)) { @copy($src, $target); break; }
+        }
+    }
+    return $target;
+}
+
 function read_json($filename, $default = []) {
-    if (!file_exists($filename)) {
+    $path = data_path($filename);
+    if (!file_exists($path)) {
         return $default;
     }
-    $content = file_get_contents($filename);
-    $data = json_decode($content, true);
+    $data = json_decode(file_get_contents($path), true);
     return is_array($data) ? $data : $default;
 }
 
 function write_json($filename, $data) {
-    file_put_contents($filename, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+    file_put_contents(data_path($filename), json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
 }
 
 // Strip HTML/script from text typed by customers before it is stored and
@@ -91,13 +126,23 @@ function is_password_hash($value) {
     return is_string($value) && password_get_info($value)['algo'] !== null && password_get_info($value)['algo'] !== 0;
 }
 
+// Each entry stores the hash of the previous one, so editing or deleting an
+// old entry in the file breaks the chain and shows up in "Verify log".
+function audit_entry_hash($entry) {
+    return hash('sha256', $entry['prev'] . '|' . $entry['timestamp'] . '|' . $entry['user'] . '|' . $entry['action']);
+}
+
 function write_audit_log($user, $action) {
     $log = read_json("audit_log.json", []);
-    $log[] = [
+    $last = count($log) ? $log[count($log) - 1] : null;
+    $entry = [
         "timestamp" => gmdate("Y-m-d\TH:i:s\Z"),
         "user" => ($user === null || $user === '') ? 'System' : $user,
-        "action" => $action
+        "action" => $action,
+        "prev" => ($last && isset($last['hash'])) ? $last['hash'] : str_repeat('0', 64),
     ];
+    $entry['hash'] = audit_entry_hash($entry);
+    $log[] = $entry;
     // Keep the file from growing forever: retain the latest 5,000 entries
     if (count($log) > 5000) {
         $log = array_slice($log, -5000);
@@ -117,6 +162,15 @@ function default_settings() {
         "bom_enabled"          => false,
         "bom_deduct_on"        => "order",   // "order" = when the order is placed, "settle" = when the bill is paid
         "block_on_low_stock"   => false,     // reject orders that would take stock below zero
+        // Billing & tax
+        "service_charge_percent" => 10,      // optional; staff can remove it on any bill
+        "gst_percent"          => 5,         // restaurant GST on food & soft drinks (split CGST/SGST)
+        "liquor_vat_percent"   => 20,        // state VAT on alcoholic drinks (outside GST)
+        "invoice_prefix"       => "INV",     // invoice no. = PREFIX/FY/00001
+        "sac_code"             => "996331",  // SAC for restaurant services
+        // UPI
+        "upi_id"               => "",
+        "upi_name"             => "",
     ];
 }
 
@@ -135,6 +189,12 @@ function enabled_payment_methods() {
 }
 
 function require_bom_enabled() {
+    // Sign-in is checked first, so anonymous callers learn nothing about settings
+    if (get_staff_user() === null) {
+        http_response_code(401);
+        echo json_encode(["status" => "error", "message" => "Please log in again."]);
+        exit;
+    }
     if (!get_settings()['bom_enabled']) {
         http_response_code(400);
         echo json_encode(["status" => "error", "message" => "BOM & Inventory is turned off. An Admin can enable it in Settings."]);
@@ -152,6 +212,262 @@ function lookup_menu_item_any($item_id) {
         if (isset($it['id']) && $it['id'] === $item_id) return $it;
     }
     return null;
+}
+
+
+// ─── Validation ─────────────────────────────────────────────────────────────
+function valid_indian_mobile($phone) {
+    return (bool)preg_match('/^[6-9][0-9]{9}$/', $phone);
+}
+
+function client_ip() {
+    return isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : 'unknown';
+}
+
+// ─── Rate limiting (login and table PIN) ───────────────────────────────────
+function rate_limited($key, $max, $window) {
+    $all = read_json("login_attempts.json", []);
+    $now = time();
+    if (isset($all[$key]) && $all[$key]['first'] + $window < $now) unset($all[$key]);
+    return isset($all[$key]) && $all[$key]['count'] >= $max
+        ? ($all[$key]['first'] + $window - $now) : 0;
+}
+
+function rate_fail($key, $window) {
+    $all = read_json("login_attempts.json", []);
+    $now = time();
+    foreach ($all as $k => $v) if ($v['first'] + $window < $now) unset($all[$k]); // tidy old entries
+    if (!isset($all[$key])) $all[$key] = ["first" => $now, "count" => 0];
+    $all[$key]['count']++;
+    write_json("login_attempts.json", $all);
+}
+
+function rate_clear($key) {
+    $all = read_json("login_attempts.json", []);
+    unset($all[$key]);
+    write_json("login_attempts.json", $all);
+}
+
+// ─── Table sessions ─────────────────────────────────────────────────────────
+// A table session belongs to ONE dining party. The guest who opens it gets a
+// secret token (kept on their phone) and a 4-digit table PIN to share with
+// friends at the same table. Without the token or PIN nobody can see or add
+// to that party's bill. Settling or closing the table ends the session.
+function new_session($table_no, $name, $phone) {
+    return [
+        "table_no" => $table_no,
+        "session_id" => "sess_" . time() . "_" . bin2hex(random_bytes(3)),
+        "token" => bin2hex(random_bytes(24)),
+        "pin" => str_pad((string)random_int(0, 9999), 4, "0", STR_PAD_LEFT),
+        "customer_name" => $name,
+        "customer_phone" => $phone,
+        "status" => "Active",
+        "started_at" => gmdate("Y-m-d\TH:i:s\Z"),
+        "service_charge_on" => true,
+        "discount" => null,
+        "orders" => [],
+        "voids" => [],
+    ];
+}
+
+// Older sessions (before this change) get a token and PIN on first use
+function normalize_sessions(&$active) {
+    $changed = false;
+    foreach ($active as $k => &$s) {
+        if (!is_array($s)) continue;
+        if (empty($s['token'])) { $s['token'] = bin2hex(random_bytes(24)); $changed = true; }
+        if (empty($s['pin'])) { $s['pin'] = str_pad((string)random_int(0, 9999), 4, "0", STR_PAD_LEFT); $changed = true; }
+        if (!isset($s['service_charge_on'])) { $s['service_charge_on'] = true; $changed = true; }
+        if (!isset($s['discount'])) { $s['discount'] = null; $changed = true; }
+        if (!isset($s['voids'])) { $s['voids'] = []; $changed = true; }
+        if (!isset($s['started_at'])) { $s['started_at'] = isset($s['orders'][0]['timestamp']) ? $s['orders'][0]['timestamp'] : gmdate("Y-m-d\TH:i:s\Z"); $changed = true; }
+    }
+    unset($s);
+    return $changed;
+}
+
+function load_sessions() {
+    $active = read_json("active_orders.json", []);
+    if (normalize_sessions($active)) write_json("active_orders.json", $active);
+    return $active;
+}
+
+function table_token() {
+    if (isset($_SERVER['HTTP_X_TABLE_TOKEN'])) return (string)$_SERVER['HTTP_X_TABLE_TOKEN'];
+    return '';
+}
+
+// For guest requests: returns the session key only if the token matches
+function guest_session_key($active, $table_no) {
+    $key = "table_" . $table_no;
+    $tok = table_token();
+    if ($table_no === '' || !isset($active[$key])) {
+        http_response_code(404);
+        echo json_encode(["status" => "error", "code" => "no_session", "message" => "This table's bill has been closed. Please start a new order."]);
+        exit;
+    }
+    if ($tok === '' || !hash_equals($active[$key]['token'], $tok)) {
+        http_response_code(403);
+        echo json_encode(["status" => "error", "code" => "not_your_table", "message" => "This table is being used by another party. Ask them for the table PIN, or ask our staff."]);
+        exit;
+    }
+    return $key;
+}
+
+// What a guest is allowed to see about their own session
+function guest_view($s) {
+    return [
+        "table_no" => $s['table_no'],
+        "status" => $s['status'],
+        "customer_name" => $s['customer_name'],
+        "pin" => $s['pin'],
+        "orders" => $s['orders'],
+        "bill" => compute_bill($s),
+    ];
+}
+
+// ─── Billing engine ─────────────────────────────────────────────────────────
+// Food & soft drinks: GST (shown as CGST + SGST, half each).
+// Alcoholic drinks: outside GST — state VAT on a separate line.
+// Service charge is optional (CCPA guidelines) and taxed with the item it
+// relates to. Discount reduces the taxable value. Total rounded to the rupee.
+function item_tax_class($item) {
+    static $cache = [];
+    $id = isset($item['id']) ? $item['id'] : '';
+    if ($id === '') return 'food';
+    if (!isset($cache[$id])) {
+        $m = lookup_menu_item_any($id);
+        $cache[$id] = ($m && in_array('Alcoholic', isset($m['tags']) ? $m['tags'] : [], true)) ? 'liquor' : 'food';
+    }
+    return $cache[$id];
+}
+
+function compute_bill($session) {
+    $st = get_settings();
+    $lines = [];
+    $sub = ["food" => 0, "liquor" => 0];
+    foreach ($session['orders'] as $ord) {
+        foreach ($ord['items'] as $it) {
+            $variant = isset($it['variant']) ? $it['variant'] : 'Portion';
+            $k = (isset($it['id']) ? $it['id'] : $it['name']) . '||' . $variant;
+            $cls = item_tax_class($it);
+            if (!isset($lines[$k])) {
+                $lines[$k] = ["id" => isset($it['id']) ? $it['id'] : '', "name" => $it['name'], "variant" => $variant,
+                              "price" => floatval($it['price']), "quantity" => 0, "tax_class" => $cls];
+            }
+            $lines[$k]['quantity'] += intval($it['quantity']);
+            $sub[$cls] += floatval($it['price']) * intval($it['quantity']);
+        }
+    }
+    $subtotal = money($sub['food'] + $sub['liquor']);
+
+    // Discount (percent or fixed), shared across food/liquor in proportion
+    $disc = 0;
+    $d = isset($session['discount']) ? $session['discount'] : null;
+    if (is_array($d) && $subtotal > 0) {
+        $disc = $d['type'] === 'pct' ? $subtotal * min(100, max(0, $d['value'])) / 100 : min($subtotal, max(0, $d['value']));
+    }
+    $disc = money($disc);
+    $ratio = $subtotal > 0 ? ($subtotal - $disc) / $subtotal : 0;
+    $net = ["food" => $sub['food'] * $ratio, "liquor" => $sub['liquor'] * $ratio];
+
+    $sc_pct = !empty($session['service_charge_on']) ? floatval($st['service_charge_percent']) : 0;
+    $sc = ["food" => $net['food'] * $sc_pct / 100, "liquor" => $net['liquor'] * $sc_pct / 100];
+
+    $food_taxable = money($net['food'] + $sc['food']);
+    $liquor_taxable = money($net['liquor'] + $sc['liquor']);
+    $gst = floatval($st['gst_percent']);
+    $vat = floatval($st['liquor_vat_percent']);
+    $cgst = money($food_taxable * $gst / 200);
+    $sgst = money($food_taxable * $gst / 200);
+    $vat_amt = money($liquor_taxable * $vat / 100);
+    $service_charge = money($sc['food'] + $sc['liquor']);
+
+    $before_round = money($subtotal - $disc + $service_charge + $cgst + $sgst + $vat_amt);
+    $total = round($before_round);
+    return [
+        "items" => array_values($lines),
+        "food_subtotal" => money($sub['food']),
+        "liquor_subtotal" => money($sub['liquor']),
+        "subtotal" => $subtotal,
+        "discount" => $disc,
+        "discount_info" => $d,
+        "service_charge_on" => !empty($session['service_charge_on']),
+        "service_charge_percent" => $sc_pct,
+        "service_charge" => $service_charge,
+        "food_taxable" => $food_taxable,
+        "liquor_taxable" => $liquor_taxable,
+        "gst_percent" => $gst,
+        "cgst" => $cgst,
+        "sgst" => $sgst,
+        "liquor_vat_percent" => $vat,
+        "vat" => $vat_amt,
+        "tax" => money($cgst + $sgst + $vat_amt),
+        "round_off" => money($total - $before_round),
+        "total" => money($total),
+    ];
+}
+
+// Sequential invoice number per Indian financial year (Apr–Mar), e.g. INV/26-27/00042
+function next_invoice_no($invoices, $prefix) {
+    $y = intval(gmdate("Y"));
+    $m = intval(gmdate("n"));
+    $start = $m >= 4 ? $y : $y - 1;
+    $fy = substr((string)$start, 2) . "-" . substr((string)($start + 1), 2);
+    $head = $prefix . "/" . $fy . "/";
+    $n = 0;
+    foreach ($invoices as $inv) {
+        if (isset($inv['invoice_no']) && strpos($inv['invoice_no'], $head) === 0) {
+            $n = max($n, intval(substr($inv['invoice_no'], strlen($head))));
+        }
+    }
+    return $head . str_pad($n + 1, 5, "0", STR_PAD_LEFT);
+}
+
+// ─── Customers (one record per mobile number — no duplicates) ──────────────
+function load_customers() {
+    $path = data_path("customers.json");
+    if (!file_exists($path)) {
+        // First run: build the list from past invoices
+        $c = [];
+        foreach (read_json("invoices.json", []) as $inv) {
+            $ph = clean_phone(isset($inv['customer_phone']) ? $inv['customer_phone'] : '');
+            if (!valid_indian_mobile($ph)) continue;
+            if (!isset($c[$ph])) $c[$ph] = ["phone" => $ph, "name" => $inv['customer_name'], "first_seen" => $inv['timestamp'],
+                                             "last_seen" => $inv['timestamp'], "visits" => 0, "invoices" => 0, "total_spent" => 0, "notes" => ""];
+            $c[$ph]['visits']++;
+            $c[$ph]['invoices']++;
+            $c[$ph]['total_spent'] = money($c[$ph]['total_spent'] + $inv['total']);
+            if ($inv['timestamp'] >= $c[$ph]['last_seen']) { $c[$ph]['last_seen'] = $inv['timestamp']; $c[$ph]['name'] = $inv['customer_name']; }
+            if ($inv['timestamp'] < $c[$ph]['first_seen']) $c[$ph]['first_seen'] = $inv['timestamp'];
+        }
+        write_json("customers.json", (object)$c);
+        return $c;
+    }
+    return read_json("customers.json", []);
+}
+
+function customer_visit($phone, $name) {
+    if (!valid_indian_mobile($phone)) return;
+    $c = load_customers();
+    $now = gmdate("Y-m-d\TH:i:s\Z");
+    if (!isset($c[$phone])) {
+        $c[$phone] = ["phone" => $phone, "name" => $name, "first_seen" => $now, "last_seen" => $now,
+                      "visits" => 0, "invoices" => 0, "total_spent" => 0, "notes" => ""];
+    }
+    $c[$phone]['name'] = $name;          // keep the latest name they gave
+    $c[$phone]['last_seen'] = $now;
+    $c[$phone]['visits']++;
+    write_json("customers.json", (object)$c);
+}
+
+function customer_invoice($phone, $total) {
+    if (!valid_indian_mobile($phone)) return;
+    $c = load_customers();
+    if (!isset($c[$phone])) return;
+    $c[$phone]['invoices']++;
+    $c[$phone]['total_spent'] = money($c[$phone]['total_spent'] + $total);
+    write_json("customers.json", (object)$c);
 }
 
 // ─── BOM / Inventory helpers ────────────────────────────────────────────────
@@ -197,19 +513,24 @@ function bom_shortages($need) {
 }
 
 // Deducts stock for sold items and records each movement in the ledger.
-function bom_deduct($items, $reason, $user) {
+// Puts stock back (e.g. an item was voided after stock was deducted)
+function bom_restock($items, $reason, $user) {
+    bom_deduct($items, $reason, $user, -1);
+}
+
+function bom_deduct($items, $reason, $user, $sign = 1) {
     $need = bom_requirements($items);
     if (count($need) === 0) return;
     $inv = read_json("inventory.json", ["materials" => []]);
     $entries = [];
     foreach ($inv['materials'] as &$m) {
         if (!isset($need[$m['id']])) continue;
-        $m['stock'] = round(floatval($m['stock']) - $need[$m['id']], 3);
+        $m['stock'] = round(floatval($m['stock']) - $sign * $need[$m['id']], 3);
         $entries[] = [
             "timestamp"   => gmdate("Y-m-d\TH:i:s\Z"),
             "material_id" => $m['id'],
             "name"        => $m['name'],
-            "delta"       => -round($need[$m['id']], 3),
+            "delta"       => -$sign * round($need[$m['id']], 3),
             "balance"     => $m['stock'],
             "reason"      => $reason,
             "user"        => $user ?: 'System',
@@ -281,13 +602,32 @@ function lookup_menu_item($item_id, $variant_label) {
     return null;
 }
 
+// ─── Uploaded media (served from the data folder) ────────────────────────────
+if (strpos($route, 'media/') === 0) {
+    $name = basename(substr($route, 6));
+    $types = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp', 'gif' => 'image/gif', 'mp4' => 'video/mp4'];
+    $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+    $file = data_dir() . '/uploads/' . $name;
+    if (!preg_match('/^[A-Za-z0-9._-]+$/', $name) || !isset($types[$ext]) || !is_file($file)) {
+        http_response_code(404);
+        echo json_encode(["status" => "error", "message" => "File not found."]);
+        exit;
+    }
+    header_remove("Pragma");
+    header("Content-Type: " . $types[$ext]);
+    header("Content-Length: " . filesize($file));
+    header("Cache-Control: public, max-age=604800");
+    readfile($file);
+    exit;
+}
+
 // ─── API Endpoint Router ────────────────────────────────────────────────────
 switch ($route) {
     
     // 1. GET/POST /api/menu
     case 'menu':
         if ($method === 'GET') {
-            echo file_exists("menu_data.json") ? file_get_contents("menu_data.json") : json_encode(["categories" => [], "items" => []]);
+            echo json_encode(read_json("menu_data.json", ["categories" => [], "items" => []]));
         } elseif ($method === 'POST') {
             require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
             $input = json_decode(file_get_contents("php://input"), true);
@@ -330,9 +670,10 @@ switch ($route) {
                     exit;
                 }
                 $filename = 'item-' . time() . '-' . bin2hex(random_bytes(4)) . '.' . $ext;
-                $target = 'uploads/' . $filename;
+                // Stored with the live data (outside the Git folder) and served by /api/media/
+                $target = data_dir() . '/uploads/' . $filename;
                 if (move_uploaded_file($_FILES['file']['tmp_name'], $target)) {
-                    echo json_encode(["status" => "success", "url" => $target]);
+                    echo json_encode(["status" => "success", "url" => "api/media/" . $filename]);
                 } else {
                     http_response_code(500);
                     echo json_encode(["status" => "error", "message" => "Failed to save file"]);
@@ -355,6 +696,14 @@ switch ($route) {
             $user_lower = strtolower($username);
             $ok = false;
 
+            // Brute-force protection: 5 wrong attempts per user+IP → locked for 15 minutes
+            $rl = "login|" . client_ip() . "|" . substr($user_lower, 0, 40);
+            if ($wait = rate_limited($rl, 5, 900)) {
+                http_response_code(429);
+                echo json_encode(["status" => "error", "message" => "Too many failed sign-in attempts. Try again in " . ceil($wait / 60) . " minutes."]);
+                exit;
+            }
+
             if ($username !== '' && is_string($password) && $password !== '' && isset($users[$user_lower]['password'])) {
                 $stored = $users[$user_lower]['password'];
                 if (is_password_hash($stored)) {
@@ -371,6 +720,7 @@ switch ($route) {
             }
 
             if ($ok) {
+                rate_clear($rl);
                 session_regenerate_id(true);
                 $_SESSION['staff_user'] = $user_lower;
                 $_SESSION['last_seen'] = time();
@@ -381,6 +731,8 @@ switch ($route) {
                     "role" => $users[$user_lower]['role']
                 ]);
             } else {
+                rate_fail($rl, 900);
+                write_audit_log("Security", "Failed sign-in for \"" . clean_text($username, 40) . "\" from " . client_ip());
                 usleep(500000); // slow down password guessing
                 http_response_code(401);
                 echo json_encode(["status" => "error", "message" => "Invalid username or passcode."]);
@@ -484,38 +836,94 @@ switch ($route) {
         }
         break;
 
-    // 6. GET/POST /api/orders
+    // 6a. GET /api/table/status?table=N — free or busy (no guest details)
+    case 'table/status':
+        $table_no = clean_table_no(isset($_GET['table']) ? $_GET['table'] : '');
+        $active = load_sessions();
+        echo json_encode(["table_no" => $table_no, "busy" => $table_no !== '' && isset($active["table_" . $table_no])]);
+        break;
+
+    // 6b. POST /api/table/start {table_no, name, phone} — open a new party's tab
+    case 'table/start':
+        if ($method !== 'POST') break;
+        $input = json_decode(file_get_contents("php://input"), true);
+        $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
+        $name = clean_text(isset($input['name']) ? $input['name'] : '', 40);
+        $phone = clean_phone(isset($input['phone']) ? $input['phone'] : '');
+        if ($table_no === '') { http_response_code(400); echo json_encode(["status" => "error", "message" => "Missing table number."]); exit; }
+        if (mb_strlen($name) < 2) { http_response_code(400); echo json_encode(["status" => "error", "message" => "Please enter your name."]); exit; }
+        if (!valid_indian_mobile($phone)) { http_response_code(400); echo json_encode(["status" => "error", "message" => "Please enter a valid 10-digit mobile number."]); exit; }
+        $active = load_sessions();
+        $key = "table_" . $table_no;
+        if (isset($active[$key])) {
+            http_response_code(409);
+            echo json_encode(["status" => "error", "code" => "table_busy", "message" => "This table already has an open bill. If you're with that group, enter the table PIN. Otherwise please ask our staff."]);
+            exit;
+        }
+        $active[$key] = new_session($table_no, $name, $phone);
+        write_json("active_orders.json", $active);
+        customer_visit($phone, $name);
+        write_audit_log("Customer", "Opened Table $table_no for $name (" . mask_phone($phone) . ")");
+        echo json_encode(["status" => "ok", "token" => $active[$key]['token'], "session" => guest_view($active[$key])]);
+        break;
+
+    // 6c. POST /api/table/join {table_no, pin} — join your group's open tab
+    case 'table/join':
+        if ($method !== 'POST') break;
+        $input = json_decode(file_get_contents("php://input"), true);
+        $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
+        $pin = preg_replace('/\D/', '', isset($input['pin']) ? (string)$input['pin'] : '');
+        $rl = "pin|" . client_ip() . "|" . $table_no;
+        if ($wait = rate_limited($rl, 5, 600)) {
+            http_response_code(429);
+            echo json_encode(["status" => "error", "message" => "Too many wrong PINs. Please ask our staff, or try again in " . ceil($wait / 60) . " min."]);
+            exit;
+        }
+        $active = load_sessions();
+        $key = "table_" . $table_no;
+        if (!isset($active[$key])) { http_response_code(404); echo json_encode(["status" => "error", "code" => "no_session", "message" => "This table has no open bill. Start a new order instead."]); exit; }
+        if (!hash_equals($active[$key]['pin'], $pin)) {
+            rate_fail($rl, 600);
+            http_response_code(403);
+            echo json_encode(["status" => "error", "message" => "That PIN is not correct."]);
+            exit;
+        }
+        rate_clear($rl);
+        write_audit_log("Customer", "Another guest joined Table $table_no with the table PIN");
+        echo json_encode(["status" => "ok", "token" => $active[$key]['token'], "session" => guest_view($active[$key])]);
+        break;
+
+    // 6d. GET /api/table/session?table=N (X-Table-Token) — the guest's own tab
+    case 'table/session':
+        $table_no = clean_table_no(isset($_GET['table']) ? $_GET['table'] : '');
+        $active = load_sessions();
+        $key = guest_session_key($active, $table_no);
+        echo json_encode(guest_view($active[$key]));
+        break;
+
+    // 6e. GET /api/orders — staff: all open tables.  POST — guest places a round.
     case 'orders':
         if ($method === 'GET') {
-            $active = read_json("active_orders.json", []);
-            if (get_user_role($staff_user) !== null) {
-                // Logged-in staff see every table
-                echo json_encode((object)$active);
-            } else {
-                // Customers only see their own table, without guest details
-                $table_no = clean_table_no(isset($_GET['table']) ? $_GET['table'] : '');
-                $key = "table_" . $table_no;
-                $out = [];
-                if ($table_no !== '' && isset($active[$key])) {
-                    $out[$key] = [
-                        "table_no" => $active[$key]['table_no'],
-                        "status"   => $active[$key]['status'],
-                        "orders"   => $active[$key]['orders'],
-                    ];
-                }
-                echo json_encode((object)$out);
+            require_role($staff_user, ['Admin', 'Owner', 'Receptionist', 'Waiter']);
+            $active = load_sessions();
+            $out = [];
+            foreach ($active as $k => $sess) {
+                unset($sess['token']);                 // staff never need the guest's secret
+                $sess['bill_total'] = compute_bill($sess)['total'];
+                $out[$k] = $sess;
             }
+            echo json_encode((object)$out);
         } elseif ($method === 'POST') {
             $input = json_decode(file_get_contents("php://input"), true);
             $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
-            if ($table_no === '') {
-                http_response_code(400);
-                echo json_encode(["status" => "error", "message" => "Missing table number."]);
-                exit;
+            $active = load_sessions();
+            $key = guest_session_key($active, $table_no);
+            if ($active[$key]['status'] === 'Checkout Requested') {
+                // Ordering again re-opens the tab
+                $active[$key]['status'] = 'Active';
             }
 
-            // Rebuild the order from the menu: names and prices come from
-            // menu_data.json, never from the customer's browser.
+            // Names and prices come from menu_data.json, never from the browser
             $items = [];
             $raw_items = isset($input['items']) && is_array($input['items']) ? $input['items'] : [];
             foreach ($raw_items as $it) {
@@ -532,7 +940,6 @@ switch ($route) {
                 exit;
             }
 
-            // BOM: optionally refuse the order if raw materials are short
             $settings = get_settings();
             if ($settings['bom_enabled'] && $settings['block_on_low_stock']) {
                 $short = bom_shortages(bom_requirements($items));
@@ -543,65 +950,47 @@ switch ($route) {
                 }
             }
 
-            $active = read_json("active_orders.json", []);
-            $key = "table_" . $table_no;
-
-            if (!isset($active[$key])) {
-                $name = clean_text(isset($input['customer_name']) ? $input['customer_name'] : '');
-                $active[$key] = [
-                    "table_no" => $table_no,
-                    "session_id" => "sess_" . time(),
-                    "customer_name" => $name !== '' ? $name : 'Guest',
-                    "customer_phone" => clean_phone(isset($input['customer_phone']) ? $input['customer_phone'] : ''),
-                    "status" => "Active",
-                    "orders" => []
-                ];
-            }
-
-            // Add new order round
             $order_id = "ord_" . time() . rand(100, 999);
             $active[$key]['orders'][] = [
                 "order_id" => $order_id,
-                "timestamp" => date("Y-m-d\TH:i:s\Z"),
+                "timestamp" => gmdate("Y-m-d\TH:i:s\Z"),
                 "status" => "Received",
                 "items" => $items
             ];
-            
             write_json("active_orders.json", $active);
-            write_audit_log("Customer", "Placed order round for Table " . $table_no);
+            write_audit_log("Customer", "Placed order round for Table $table_no (" . count($items) . " items)");
             if ($settings['bom_enabled'] && $settings['bom_deduct_on'] === 'order') {
                 bom_deduct($items, "Order $order_id (Table $table_no)", "Customer");
             }
-            echo json_encode(["status" => "ok", "message" => "Order round placed.", "order_id" => $order_id]);
+            echo json_encode(["status" => "ok", "message" => "Order round placed.", "order_id" => $order_id, "session" => guest_view($active[$key])]);
         }
         break;
 
-    // 7. POST /api/orders/update-status
+    // 7. POST /api/orders/update-status (kitchen status of a round)
     case 'orders/update-status':
         if ($method === 'POST') {
             require_role($staff_user, ['Admin', 'Owner', 'Receptionist', 'Waiter']);
             $input = json_decode(file_get_contents("php://input"), true);
-            $order_id = isset($input['order_id']) ? $input['order_id'] : '';
-            $table_no = isset($input['table_no']) ? $input['table_no'] : '';
-            $new_status = isset($input['status']) ? $input['status'] : '';
-            
-            $active = read_json("active_orders.json", []);
+            $order_id = isset($input['order_id']) ? (string)$input['order_id'] : '';
+            $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
+            $new_status = isset($input['status']) ? (string)$input['status'] : '';
+            if (!in_array($new_status, ['Received', 'Preparing', 'Ready', 'Served'], true)) {
+                http_response_code(400); echo json_encode(["status" => "error", "message" => "Unknown status."]); exit;
+            }
+            $active = load_sessions();
             $key = "table_" . $table_no;
             $updated = false;
-            
             if (isset($active[$key])) {
                 foreach ($active[$key]['orders'] as &$o) {
                     if ($o['order_id'] === $order_id) {
                         $o['status'] = $new_status;
-                        if ($new_status === 'Served') {
-                            $o['completed_at'] = date("Y-m-d\TH:i:s\Z");
-                        }
+                        if ($new_status === 'Served') $o['completed_at'] = gmdate("Y-m-d\TH:i:s\Z");
                         $updated = true;
                         break;
                     }
                 }
+                unset($o);
             }
-            
             if ($updated) {
                 write_json("active_orders.json", $active);
                 write_audit_log($staff_user, "Updated Table $table_no order $order_id status to $new_status");
@@ -613,80 +1002,157 @@ switch ($route) {
         }
         break;
 
-    // 8. POST /api/orders/request-checkout
+    // 8. POST /api/orders/request-checkout (guest asks for the bill)
     case 'orders/request-checkout':
         if ($method === 'POST') {
             $input = json_decode(file_get_contents("php://input"), true);
             $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
-
-            $active = read_json("active_orders.json", []);
-            $key = "table_" . $table_no;
-
-            if ($table_no !== '' && isset($active[$key])) {
-                $active[$key]['status'] = 'Checkout Requested';
-                write_json("active_orders.json", $active);
-                write_audit_log("Customer", "Table $table_no requested final bill settlement");
-                echo json_encode(["status" => "ok"]);
-            } else {
-                http_response_code(404);
-                echo json_encode(["status" => "error", "message" => "Table session not found."]);
-            }
+            $active = load_sessions();
+            $key = guest_session_key($active, $table_no);
+            $active[$key]['status'] = 'Checkout Requested';
+            write_json("active_orders.json", $active);
+            write_audit_log("Customer", "Table $table_no asked for the bill");
+            echo json_encode(["status" => "ok", "session" => guest_view($active[$key])]);
         }
         break;
 
-    // 9. POST /api/orders/checkout
+    // 8b. GET /api/orders/bill-preview?table=N — the exact bill staff will settle
+    case 'orders/bill-preview':
+        require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+        $table_no = clean_table_no(isset($_GET['table']) ? $_GET['table'] : '');
+        $active = load_sessions();
+        if (!isset($active["table_" . $table_no])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "No open bill on this table."]); exit; }
+        echo json_encode(compute_bill($active["table_" . $table_no]));
+        break;
+
+    // 8c. POST /api/orders/adjust {table_no, service_charge_on?, discount?} — before settling
+    case 'orders/adjust':
+        if ($method !== 'POST') break;
+        require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+        $input = json_decode(file_get_contents("php://input"), true);
+        $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
+        $active = load_sessions();
+        $key = "table_" . $table_no;
+        if (!isset($active[$key])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "No open bill on this table."]); exit; }
+        $notes = [];
+        if (array_key_exists('service_charge_on', $input)) {
+            $on = (bool)$input['service_charge_on'];
+            if ($on !== (bool)$active[$key]['service_charge_on']) {
+                $active[$key]['service_charge_on'] = $on;
+                $notes[] = $on ? "added service charge back" : "removed service charge";
+            }
+        }
+        if (array_key_exists('discount', $input)) {
+            $d = $input['discount'];
+            if ($d === null || (is_array($d) && floatval(isset($d['value']) ? $d['value'] : 0) <= 0)) {
+                if ($active[$key]['discount'] !== null) $notes[] = "removed discount";
+                $active[$key]['discount'] = null;
+            } else {
+                $type = (isset($d['type']) && $d['type'] === 'amt') ? 'amt' : 'pct';
+                $val = round(floatval($d['value']), 2);
+                $reason = clean_text(isset($d['reason']) ? $d['reason'] : '', 80);
+                if ($reason === '') { http_response_code(400); echo json_encode(["status" => "error", "message" => "Enter a reason for the discount."]); exit; }
+                if ($type === 'pct' && $val > 100) { http_response_code(400); echo json_encode(["status" => "error", "message" => "Discount cannot be more than 100%."]); exit; }
+                $active[$key]['discount'] = ["type" => $type, "value" => $val, "reason" => $reason, "by" => $staff_user];
+                $notes[] = "discount " . ($type === 'pct' ? "$val%" : "₹$val") . " ($reason)";
+            }
+        }
+        write_json("active_orders.json", $active);
+        if (count($notes)) write_audit_log($staff_user, "Table $table_no bill: " . implode("; ", $notes));
+        echo json_encode(["status" => "ok", "bill" => compute_bill($active[$key])]);
+        break;
+
+    // 8d. POST /api/orders/void-item {table_no, order_id, index, qty, reason}
+    case 'orders/void-item':
+        if ($method !== 'POST') break;
+        require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+        $input = json_decode(file_get_contents("php://input"), true);
+        $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
+        $order_id = isset($input['order_id']) ? (string)$input['order_id'] : '';
+        $idx = intval(isset($input['index']) ? $input['index'] : -1);
+        $qty = max(1, intval(isset($input['qty']) ? $input['qty'] : 1));
+        $reason = clean_text(isset($input['reason']) ? $input['reason'] : '', 80);
+        if ($reason === '') { http_response_code(400); echo json_encode(["status" => "error", "message" => "Enter a reason for the void."]); exit; }
+        $active = load_sessions();
+        $key = "table_" . $table_no;
+        $voided = null;
+        if (isset($active[$key])) {
+            foreach ($active[$key]['orders'] as $oi => &$o) {
+                if ($o['order_id'] !== $order_id || !isset($o['items'][$idx])) continue;
+                $line = $o['items'][$idx];
+                $qty = min($qty, intval($line['quantity']));
+                $voided = array_merge($line, ["quantity" => $qty]);
+                if ($qty >= intval($line['quantity'])) array_splice($o['items'], $idx, 1);
+                else $o['items'][$idx]['quantity'] = intval($line['quantity']) - $qty;
+                if (count($o['items']) === 0) array_splice($active[$key]['orders'], $oi, 1);
+                break;
+            }
+            unset($o);
+        }
+        if ($voided === null) { http_response_code(404); echo json_encode(["status" => "error", "message" => "Item not found on this table."]); exit; }
+        $active[$key]['voids'][] = ["timestamp" => gmdate("Y-m-d\TH:i:s\Z"), "user" => $staff_user, "item" => $voided, "reason" => $reason];
+        write_json("active_orders.json", $active);
+        $st = get_settings();
+        if ($st['bom_enabled'] && $st['bom_deduct_on'] === 'order') {
+            bom_restock([$voided], "Void on Table $table_no — $reason", $staff_user);
+        }
+        write_audit_log($staff_user, "Voided {$qty} × {$voided['name']} ({$voided['variant']}, ₹" . money($voided['price'] * $qty) . ") on Table $table_no — $reason");
+        echo json_encode(["status" => "ok", "bill" => compute_bill($active[$key])]);
+        break;
+
+    // 8e. POST /api/orders/close-table {table_no, reason} — end a session without billing
+    case 'orders/close-table':
+        if ($method !== 'POST') break;
+        require_role($staff_user, ['Admin', 'Owner']);
+        $input = json_decode(file_get_contents("php://input"), true);
+        $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
+        $reason = clean_text(isset($input['reason']) ? $input['reason'] : '', 80);
+        if ($reason === '') { http_response_code(400); echo json_encode(["status" => "error", "message" => "Enter a reason for closing the table without a bill."]); exit; }
+        $active = load_sessions();
+        $key = "table_" . $table_no;
+        if (!isset($active[$key])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "Table is already free."]); exit; }
+        $sess = $active[$key];
+        $bill = compute_bill($sess);
+        unset($active[$key]);
+        write_json("active_orders.json", $active);
+        $st = get_settings();
+        if ($st['bom_enabled'] && $st['bom_deduct_on'] === 'order' && count($bill['items'])) {
+            bom_restock($bill['items'], "Table $table_no closed without bill — $reason", $staff_user);
+        }
+        write_audit_log($staff_user, "Closed Table $table_no WITHOUT billing (" . count($bill['items']) . " items, ₹" . $bill['total'] . " voided) — $reason");
+        echo json_encode(["status" => "ok"]);
+        break;
+
+    // 9. POST /api/orders/checkout {table_no, payments[]}
     case 'orders/checkout':
         if ($method === 'POST') {
             require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
             $input = json_decode(file_get_contents("php://input"), true);
             $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
-            
-            $active = read_json("active_orders.json", []);
+
+            $active = load_sessions();
             $key = "table_" . $table_no;
-            
             if ($table_no === '' || !isset($active[$key])) {
                 http_response_code(404);
                 echo json_encode(["status" => "error", "message" => "No active session for Table $table_no"]);
                 exit;
             }
-            
             $session = $active[$key];
             $settings = get_settings();
-            
-            // Consolidate items
-            $bill_items = [];
-            $subtotal = 0;
-            foreach ($session['orders'] as $ord) {
-                foreach ($ord['items'] as $it) {
-                    $variant = isset($it['variant']) ? $it['variant'] : 'Portion';
-                    $item_key = (isset($it['id']) ? $it['id'] : $it['name']) . '||' . $variant;
-                    if (!isset($bill_items[$item_key])) {
-                        $bill_items[$item_key] = [
-                            "id" => isset($it['id']) ? $it['id'] : '',
-                            "name" => $it['name'],
-                            "variant" => $variant,
-                            "price" => floatval($it['price']),
-                            "quantity" => 0
-                        ];
-                    }
-                    $bill_items[$item_key]['quantity'] += intval($it['quantity']);
-                    $subtotal += floatval($it['price']) * intval($it['quantity']);
-                }
+            $bill = compute_bill($session);
+            if (count($bill['items']) === 0) {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "This table has no items to bill. Use “Close table” instead."]);
+                exit;
             }
-            
-            $subtotal = money($subtotal);
-            $svc_charge = money($subtotal * 0.10);
-            $tax = money($subtotal * 0.05);
-            $total = money($subtotal + $svc_charge + $tax);
+            $total = $bill['total'];
 
-            // ── Payment entry: one or more payments (split bill) ──
-            // Each payment = { method: "UPI" | "Cash" | "Card", amount }
-            // and together they must add up to the bill total.
+            // Payment entry: one or more payments (split bill) that add up to the total
             $allowed_methods = enabled_payment_methods();
             $raw_payments = isset($input['payments']) && is_array($input['payments']) ? $input['payments'] : [];
             if (count($raw_payments) === 0) {
                 http_response_code(400);
-                echo json_encode(["status" => "error", "message" => "Please record how the bill was paid (UPI, Cash or Card)."]);
+                echo json_encode(["status" => "error", "message" => "Please record how the bill was paid (" . implode(", ", $allowed_methods) . ")."]);
                 exit;
             }
             if (count($raw_payments) > 50) {
@@ -716,7 +1182,7 @@ switch ($route) {
             }
             if (abs(money($paid) - $total) > 0.01) {
                 http_response_code(400);
-                echo json_encode(["status" => "error", "message" => "Payments add up to ₹" . money($paid) . " but the bill total is ₹$total."]);
+                echo json_encode(["status" => "error", "message" => "Payments add up to ₹" . money($paid) . " but the bill total is ₹$total. The bill may have changed — please reopen it."]);
                 exit;
             }
             $methods_used = array_values(array_unique(array_column($payments, 'method')));
@@ -724,61 +1190,53 @@ switch ($route) {
                 ? "Split (" . count($payments) . ") · " . implode(" + ", $methods_used)
                 : $payments[0]['method'];
 
-            // Unguessable ID, so people cannot browse other customers' bills
+            $invoices = read_json("invoices.json", []);
+            // Random ID for the e-bill link (cannot be guessed); sequential number for tax records
             $invoice_id = "INV-" . time() . "-" . strtoupper(bin2hex(random_bytes(4)));
-            
-            $invoice = [
+            $invoice_no = next_invoice_no($invoices, $settings['invoice_prefix']);
+
+            $invoice = array_merge($bill, [
                 "invoice_id" => $invoice_id,
+                "invoice_no" => $invoice_no,
                 "table_no" => $table_no,
                 "customer_name" => $session['customer_name'],
                 "customer_phone" => $session['customer_phone'],
                 "timestamp" => gmdate("Y-m-d\TH:i:s\Z"),
-                "subtotal" => $subtotal,
-                "service_charge" => $svc_charge,
-                "tax" => $tax,
-                "total" => $total,
-                "items" => array_values($bill_items),
+                "seller" => [
+                    "name" => $settings['business_name'], "address" => $settings['business_address'],
+                    "phone" => $settings['business_phone'], "gstin" => $settings['gstin'], "sac" => $settings['sac_code'],
+                ],
                 "payments" => $payments,
                 "payment_mode" => $payment_mode,
+                "voids" => $session['voids'],
                 "settled_by" => $staff_user
-            ];
-            
-            // Save invoice
-            $invoices = read_json("invoices.json", []);
+            ]);
+
             $invoices[] = $invoice;
             write_json("invoices.json", $invoices);
-            
-            // Delete active table
             unset($active[$key]);
             write_json("active_orders.json", $active);
+            customer_invoice($session['customer_phone'], $total);
 
-            // BOM: deduct stock now if configured to do it at settlement
             if ($settings['bom_enabled'] && $settings['bom_deduct_on'] === 'settle') {
-                bom_deduct(array_values($bill_items), "Invoice $invoice_id (Table $table_no)", $staff_user);
+                bom_deduct($bill['items'], "Invoice $invoice_no (Table $table_no)", $staff_user);
             }
-            
-            // Mock SMS sending log
+
             $scheme = $is_https ? "https://" : "http://";
             $base_dir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'])), '/');
             $sms_sent = read_json("sms_sent.json", []);
             $sms_msg = "Thank You for Visiting " . $settings['business_name'] . ", Here's your e-bill: " . $scheme . $_SERVER['HTTP_HOST'] . $base_dir . "/invoice.html?id=" . $invoice_id;
-            $sms_sent[] = [
-                "timestamp" => gmdate("Y-m-d\TH:i:s\Z"),
-                "to" => $session['customer_phone'],
-                "message" => $sms_msg
-            ];
+            $sms_sent[] = ["timestamp" => gmdate("Y-m-d\TH:i:s\Z"), "to" => $session['customer_phone'], "message" => $sms_msg];
             write_json("sms_sent.json", $sms_sent);
-            
-            write_audit_log($staff_user, "Settled Table $table_no — Invoice $invoice_id, Total ₹$total, Paid by $payment_mode");
+
+            $adj = [];
+            if (!$bill['service_charge_on']) $adj[] = "service charge removed";
+            if ($bill['discount'] > 0) $adj[] = "discount ₹" . $bill['discount'];
+            write_audit_log($staff_user, "Settled Table $table_no — $invoice_no, Total ₹$total, Paid by $payment_mode" . (count($adj) ? " (" . implode(", ", $adj) . ")" : ""));
             if ($session['customer_phone'] !== '') {
                 write_audit_log("System", "Sent SMS e-bill to customer (" . mask_phone($session['customer_phone']) . ")");
             }
-            
-            echo json_encode([
-                "status" => "ok",
-                "invoice" => $invoice,
-                "sms_message" => $sms_msg
-            ]);
+            echo json_encode(["status" => "ok", "invoice" => $invoice, "sms_message" => $sms_msg]);
         }
         break;
 
@@ -1031,7 +1489,7 @@ switch ($route) {
             
             // Map item name to category
             $menu_items = [];
-            if (file_exists("menu_data.json")) {
+            if (true) {
                 $md = read_json("menu_data.json", []);
                 $categories = [];
                 if (isset($md['categories'])) {
@@ -1122,6 +1580,21 @@ switch ($route) {
             if (isset($input['bom_enabled']))        $new['bom_enabled']        = (bool)$input['bom_enabled'];
             if (isset($input['bom_deduct_on']))      $new['bom_deduct_on']      = $input['bom_deduct_on'] === 'settle' ? 'settle' : 'order';
             if (isset($input['block_on_low_stock'])) $new['block_on_low_stock'] = (bool)$input['block_on_low_stock'];
+            if (isset($input['service_charge_percent'])) $new['service_charge_percent'] = max(0, min(20, round(floatval($input['service_charge_percent']), 2)));
+            if (isset($input['gst_percent']))        $new['gst_percent']        = max(0, min(28, round(floatval($input['gst_percent']), 2)));
+            if (isset($input['liquor_vat_percent'])) $new['liquor_vat_percent'] = max(0, min(60, round(floatval($input['liquor_vat_percent']), 2)));
+            if (isset($input['invoice_prefix']))     $new['invoice_prefix']     = substr(preg_replace('/[^A-Z0-9]/', '', strtoupper((string)$input['invoice_prefix'])), 0, 4) ?: 'INV';
+            if (isset($input['sac_code']))           $new['sac_code']           = substr(preg_replace('/\D/', '', (string)$input['sac_code']), 0, 8);
+            if (isset($input['upi_id'])) {
+                $upi = strtolower(trim((string)$input['upi_id']));
+                if ($upi !== '' && !preg_match('/^[a-z0-9.\-_]{2,256}@[a-z][a-z0-9]{2,64}$/', $upi)) {
+                    http_response_code(400);
+                    echo json_encode(["status" => "error", "message" => "That UPI ID doesn't look right. It should look like name@bank, e.g. downtownluka@okhdfcbank."]);
+                    exit;
+                }
+                $new['upi_id'] = $upi;
+            }
+            if (isset($input['upi_name']))           $new['upi_name']           = clean_text($input['upi_name'], 50);
             write_json("settings.json", $new);
 
             // Describe what changed for the audit log
@@ -1150,6 +1623,12 @@ switch ($route) {
             "tables_count"     => $s['tables_count'],
             "payment_methods"  => enabled_payment_methods(),
             "bom_enabled"      => $s['bom_enabled'],
+            "service_charge_percent" => $s['service_charge_percent'],
+            "gst_percent"      => $s['gst_percent'],
+            "liquor_vat_percent" => $s['liquor_vat_percent'],
+            "sac_code"         => $s['sac_code'],
+            "upi_id"           => $s['upi_id'],
+            "upi_name"         => $s['upi_name'] !== '' ? $s['upi_name'] : $s['business_name'],
         ]);
         break;
 
@@ -1581,6 +2060,80 @@ switch ($route) {
         }
         break;
 
+    // 26a. GET /api/audit-log/verify — check nobody edited or removed entries
+    case 'audit-log/verify':
+        require_role($staff_user, ['Admin', 'Owner']);
+        $log = read_json("audit_log.json", []);
+        $checked = 0; $legacy = 0; $broken = null; $prev = null;
+        foreach ($log as $i => $e) {
+            if (!isset($e['hash'])) { $legacy++; $prev = null; continue; }
+            if (audit_entry_hash($e) !== $e['hash'] || ($prev !== null && $e['prev'] !== $prev)) {
+                $broken = ["index" => $i, "timestamp" => isset($e['timestamp']) ? $e['timestamp'] : ''];
+                break;
+            }
+            $prev = $e['hash'];
+            $checked++;
+        }
+        echo json_encode(["ok" => $broken === null, "checked" => $checked, "legacy" => $legacy, "broken" => $broken]);
+        break;
+
+    // 29. GET /api/customers — customer list (one per mobile number)
+    case 'customers':
+        if ($method === 'GET') {
+            require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+            $c = array_values(load_customers());
+            usort($c, function($a, $b) { return strcmp($b['last_seen'], $a['last_seen']); });
+            echo json_encode($c);
+        } elseif ($method === 'POST') {
+            $input = json_decode(file_get_contents("php://input"), true);
+            $action = isset($input['action']) ? $input['action'] : '';
+            $phone = clean_phone(isset($input['phone']) ? $input['phone'] : '');
+            $c = load_customers();
+            if ($action === 'save') {
+                require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+                if (!isset($c[$phone])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "Customer not found."]); exit; }
+                $name = clean_text(isset($input['name']) ? $input['name'] : '', 40);
+                if (mb_strlen($name) >= 2) $c[$phone]['name'] = $name;
+                $c[$phone]['notes'] = clean_text(isset($input['notes']) ? $input['notes'] : '', 300);
+                write_json("customers.json", (object)$c);
+                write_audit_log($staff_user, "Updated customer " . mask_phone($phone));
+                echo json_encode(["status" => "ok", "customer" => $c[$phone]]);
+            } elseif ($action === 'delete') {
+                // Removes the customer profile (e.g. on request). Tax invoices are kept, as the law requires.
+                require_role($staff_user, ['Admin']);
+                if (!isset($c[$phone])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "Customer not found."]); exit; }
+                unset($c[$phone]);
+                write_json("customers.json", (object)$c);
+                write_audit_log($staff_user, "Deleted customer profile " . mask_phone($phone));
+                echo json_encode(["status" => "ok"]);
+            } else {
+                http_response_code(400); echo json_encode(["status" => "error", "message" => "Unknown action."]);
+            }
+        }
+        break;
+
+    // 30. GET /api/customers/detail?phone= — profile + past orders
+    case 'customers/detail':
+        require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+        $phone = clean_phone(isset($_GET['phone']) ? $_GET['phone'] : '');
+        $c = load_customers();
+        if (!isset($c[$phone])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "Customer not found."]); exit; }
+        $mine = array_values(array_filter(read_json("invoices.json", []), function($inv) use ($phone) {
+            return clean_phone(isset($inv['customer_phone']) ? $inv['customer_phone'] : '') === $phone;
+        }));
+        usort($mine, function($a, $b) { return strcmp($b['timestamp'], $a['timestamp']); });
+        $fav = [];
+        foreach ($mine as $inv) foreach ($inv['items'] as $it) {
+            $n = $it['name'];
+            if (!isset($fav[$n])) $fav[$n] = ["name" => $n, "qty" => 0];
+            $fav[$n]['qty'] += intval($it['quantity']);
+        }
+        usort($fav, function($a, $b) { return $b['qty'] - $a['qty']; });
+        $open = null;
+        foreach (load_sessions() as $sess) if ($sess['customer_phone'] === $phone) $open = ["table_no" => $sess['table_no'], "since" => $sess['started_at']];
+        echo json_encode(["customer" => $c[$phone], "invoices" => $mine, "favourites" => array_slice($fav, 0, 5), "open_table" => $open]);
+        break;
+
     // 26. GET /api/dashboard/payments — revenue by payment method (last 30 days)
     case 'dashboard/payments':
         require_role($staff_user, ['Admin', 'Owner']);
@@ -1608,8 +2161,9 @@ switch ($route) {
         if ($method === 'POST') {
             // Cap the size and keep the log from growing without limit
             $input = substr(file_get_contents("php://input"), 0, 4000);
-            if (!file_exists("client_errors.log") || filesize("client_errors.log") < 5 * 1024 * 1024) {
-                file_put_contents("client_errors.log", "[" . date("Y-m-d H:i:s") . "] " . str_replace(["\r", "\n"], " ", $input) . "\n", FILE_APPEND | LOCK_EX);
+            $logf = data_dir() . "/client_errors.log";
+            if (!file_exists($logf) || filesize($logf) < 5 * 1024 * 1024) {
+                file_put_contents($logf, "[" . date("Y-m-d H:i:s") . "] " . str_replace(["\r", "\n"], " ", $input) . "\n", FILE_APPEND | LOCK_EX);
             }
             echo json_encode(["status" => "ok"]);
         }

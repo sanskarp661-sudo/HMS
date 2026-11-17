@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
   <!-- Global Stylesheet -->
-  <link rel="stylesheet" href="assets/css/menu.css?v=20261117d">
+  <link rel="stylesheet" href="assets/css/menu.css?v=20261117f">
   
   <!-- Favicon -->
   <link rel="icon" type="image/jpeg" href="images.jpg">
@@ -123,7 +123,7 @@
 
     <!-- Page Footer Disclaimers -->
     <footer class="footer-disclaimer">
-      <p>* Government Taxes as applicable. We levy 10% Service Charges.</p>
+      <p id="footer-charges">Prices exclude taxes. A service charge may be added to your bill — it is optional and we'll remove it if you ask.</p>
       <p style="margin-top: 8px; color: var(--text-light);">Downtown Luka • Cyberhub Gurgaon • Established 2011</p>
     </footer>
 
@@ -202,16 +202,19 @@
     </div>
     
     <div class="drawer-foot">
-      <div class="drawer-breakdown">
-        <div style="display:flex; justify-content:space-between;"><span>Est. Subtotal</span><span id="tracking-subtotal-val">₹0</span></div>
-        <div style="display:flex; justify-content:space-between;"><span>Service Charge (10%)</span><span id="tracking-service-charge-val">₹0</span></div>
-        <div style="display:flex; justify-content:space-between;"><span>Government Taxes (5%)</span><span id="tracking-tax-val">₹0</span></div>
-        <div class="drawer-total" style="margin:6px 0 0; padding-top:8px; border-top:1px solid var(--border-color);">
-          <span>Est. Total Due</span>
-          <span id="tracking-total-val">₹0</span>
-        </div>
+      <div class="table-pin" id="table-pin-box" style="display:none;">
+        <i class="fas fa-key"></i>
+        <span>Table PIN <b id="table-pin">----</b></span>
+        <small>Share it with friends at your table so they can order on the same bill.</small>
       </div>
-      
+      <div class="drawer-breakdown" id="tracking-breakdown"></div>
+      <div class="upi-pay" id="upi-pay-box" style="display:none;">
+        <div class="upi-pay-head"><i class="fas fa-qrcode"></i> Pay by UPI</div>
+        <div class="upi-qr" id="upi-qr"></div>
+        <a class="btn btn-primary btn-block" id="upi-app-link" href="#"><i class="fas fa-mobile-screen-button"></i> Pay <span id="upi-amount">₹0</span> in a UPI app</a>
+        <small>Paying to <b id="upi-payee"></b>. Show the payment confirmation to our staff.</small>
+      </div>
+
       <button class="btn btn-dark btn-block btn-lg" onclick="requestCustomerCheckout()" id="btn-request-checkout">
         <i class="fas fa-file-invoice-dollar"></i> Ask for the Bill
       </button>
@@ -237,21 +240,37 @@
       <form id="welcome-guest-form" onsubmit="submitWelcomeGuest(event)">
         <label class="w-field">
           <span>Your name</span>
-          <input type="text" id="guest-name-input" placeholder="e.g. Priya" autocomplete="name" maxlength="40" required>
+          <input type="text" id="guest-name-input" placeholder="e.g. Priya" autocomplete="name" minlength="2" maxlength="40" required>
         </label>
         <label class="w-field">
           <span>Mobile number <small>(for your e-bill)</small></span>
-          <input type="tel" id="guest-phone-input" placeholder="10-digit mobile number" inputmode="numeric" autocomplete="tel-national" pattern="[0-9]{10}" maxlength="10" title="Please enter a valid 10-digit mobile number" required>
+          <input type="tel" id="guest-phone-input" placeholder="10-digit mobile number" inputmode="numeric" autocomplete="tel-national" pattern="[6-9][0-9]{9}" maxlength="10" title="Please enter a valid 10-digit mobile number" required>
         </label>
-        <button type="submit" class="btn btn-primary btn-block btn-lg">
+        <div class="w-error" id="welcome-error" role="alert"></div>
+        <button type="submit" class="btn btn-primary btn-block btn-lg" id="btn-start-order">
           <i class="fas fa-utensils"></i> Start ordering
         </button>
+        <button type="button" class="w-link" onclick="showWelcomeMode('join')">Already with a group at this table? <b>Join with table PIN</b></button>
+      </form>
+
+      <form id="welcome-join-form" onsubmit="submitJoinTable(event)" style="display:none;">
+        <div class="w-busy-note"><i class="fas fa-users"></i> This table already has an open bill. If you're with that group, enter the 4-digit <b>table PIN</b> shown under “My Orders” on their phone.</div>
+        <label class="w-field">
+          <span>Table PIN</span>
+          <input type="text" id="guest-pin-input" placeholder="••••" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" required style="letter-spacing:8px;text-align:center;font-size:22px;font-weight:700;">
+        </label>
+        <div class="w-error" id="join-error" role="alert"></div>
+        <button type="submit" class="btn btn-primary btn-block btn-lg"><i class="fas fa-right-to-bracket"></i> Join the table</button>
+        <p class="w-help">Not with them? Please ask our staff to seat you or to close the previous bill.</p>
+        <button type="button" class="w-link" id="btn-back-start" onclick="showWelcomeMode('start')">Start a new order instead</button>
       </form>
     </div>
   </div>
 
   <!-- Core Scripts -->
-  <script src="assets/js/seed.js?v=20261117d"></script>
-  <script src="assets/js/menu.js?v=20261117d"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js" defer></script>
+  <script src="assets/js/upi-qr.js?v=20261117f"></script>
+  <script src="assets/js/seed.js?v=20261117f"></script>
+  <script src="assets/js/menu.js?v=20261117f"></script>
 </body>
 </html>

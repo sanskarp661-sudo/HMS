@@ -537,6 +537,32 @@ img, video { max-width: 100%; }
   .grn-input { width: 110px; }
 }
 
+/* ─── Bill adjustments, UPI, customers ──────────────────────────────────── */
+.adjust-box { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 16px; background: var(--surface-2); }
+.disc-row { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.disc-row #disc-reason { grid-column: 1 / -1; grid-row: 2; }
+.disc-row .input, .disc-row .select { padding: 7px 10px; font-size: 13px; }
+.disc-current { margin-top: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: var(--success-700); background: var(--success-50); padding: 8px 10px; border-radius: 8px; }
+.receipt-sum .row.discount { color: var(--success-700); }
+.receipt-sum .row.sub { font-size: 12px; color: var(--muted); }
+.receipt-title { text-align: center; font-weight: 800; letter-spacing: 1px; font-size: 12px; margin-bottom: 8px; }
+.upi-preview { margin-top: 16px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.upi-preview svg { border-radius: 10px; border: 1px solid var(--border); }
+.upi-big-amount { font-size: 30px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 10px; }
+.upi-big-qr { display: flex; justify-content: center; }
+.upi-big-qr svg { border-radius: 12px; border: 1px solid var(--border); }
+.pin-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: var(--accent-50); color: var(--accent-700); font-weight: 700; letter-spacing: 1px; }
+.void-btn { border: none; background: none; color: var(--faint); cursor: pointer; padding: 2px 6px; border-radius: 6px; margin-left: 6px; }
+.void-btn:hover { color: var(--danger); background: var(--danger-50); }
+.cust-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.cust-kpis div { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+.cust-kpis b { display: block; font-size: 18px; }
+.cust-kpis span { font-size: 12px; color: var(--muted); }
+.chip-list { display: flex; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 640px) {
+
+}
+
 /* ─── Toasts ────────────────────────────────────────────────────────────── */
 #toast-container {
   position: fixed; right: 20px; bottom: 20px; z-index: 3000;

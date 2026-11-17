@@ -375,6 +375,25 @@ img, video { max-width: 100%; }
 .w-field input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
 .welcome-card .btn { margin-top: 6px; }
 
+/* Table PIN, UPI, welcome modes */
+.table-pin { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--primary-glow); color: var(--text-main); font-size: 14px; }
+.table-pin i { color: var(--primary); grid-row: span 2; font-size: 18px; }
+.table-pin b { font-size: 18px; letter-spacing: 3px; color: var(--primary); margin-left: 4px; }
+.table-pin small { color: var(--text-muted); font-size: 12px; }
+.upi-pay { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px; border: 1px dashed var(--border-hover); border-radius: 14px; background: var(--bg-card); text-align: center; }
+.upi-pay-head { font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.upi-pay small { color: var(--text-muted); font-size: 12px; }
+.upi-qr svg { display: block; border-radius: 10px; }
+.w-link { display: block; width: 100%; margin-top: 12px; background: none; border: none; color: var(--text-muted); font-size: 13px; cursor: pointer; text-align: center; }
+.w-link b { color: var(--primary); }
+.w-error { color: var(--error); font-size: 13px; min-height: 0; margin: -4px 0 10px; }
+.w-error:empty { display: none; }
+.w-busy-note { background: var(--warning-glow); color: #7c2d12; border-radius: 10px; padding: 12px; font-size: 13px; margin-bottom: 14px; }
+.w-busy-note i { margin-right: 6px; }
+.w-help { font-size: 12.5px; color: var(--text-muted); text-align: center; margin-top: 12px; }
+.bill-row { display: flex; justify-content: space-between; }
+.bill-row.discount { color: var(--success); }
+
 /* ─── Tablet ────────────────────────────────────────────────────────────── */
 @media (max-width: 900px) {
   .menu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

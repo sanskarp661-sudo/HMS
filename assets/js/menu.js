@@ -602,45 +602,171 @@ function setupScrollObserver() {
 window.activeTableNo = null;
 let cart = {};
 
+// ─── Table session (one per dining party) ────────────────────────────────
+// The guest who opens the table gets a secret token, stored only on this
+// phone. Friends join with the 4-digit table PIN. Without either, nobody can
+// see or add to the party's bill. When staff settle the bill the session ends.
+let tableSession = null;     // last session data from the server
+let pollHandle = null;
+let publicCfg = { upi_id: "", upi_name: "", service_charge_percent: 10 };
+
+function tokenKey() { return `hms_table_token_${window.activeTableNo}`; }
+function getToken() { try { return localStorage.getItem(tokenKey()) || ""; } catch (e) { return ""; } }
+function setToken(t) { try { t ? localStorage.setItem(tokenKey(), t) : localStorage.removeItem(tokenKey()); } catch (e) {} }
+
+function tableFetch(path, opts = {}) {
+  const headers = Object.assign({ "Content-Type": "application/json", "X-Table-Token": getToken() }, opts.headers || {});
+  return fetch(path, Object.assign({}, opts, { headers })).then(async res => {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(data.message || "Something went wrong. Please try again.");
+      err.code = data.code;
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  });
+}
+
 function initTableCartSystem() {
   const params = new URLSearchParams(window.location.search);
-  const table = params.get("table");
-  
-  if (table) {
-    window.activeTableNo = table.trim();
-    
-    const tableHeader = document.getElementById("table-number-header");
-    if (tableHeader) {
-      tableHeader.innerHTML = `<span style="color:var(--primary); font-weight:700;"><i class="fas fa-utensils"></i> Table ${window.activeTableNo}</span>`;
-    }
-    
-    document.getElementById("btn-cart-trigger").style.display = "inline-flex";
-    document.getElementById("btn-track-trigger").style.display = "inline-flex";
-    
-    try {
-      const storedCart = localStorage.getItem(`luka_cart_table_${window.activeTableNo}`);
-      if (storedCart) {
-        cart = JSON.parse(storedCart);
-        updateCartBadges();
-      }
-    } catch(e) {
-      cart = {};
-    }
+  const table = (params.get("table") || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 10);
+  if (!table) return;
+  window.activeTableNo = table;
 
-    // Check for customer CRM details
-    const storedName = sessionStorage.getItem("luka_guest_name");
-    const storedPhone = sessionStorage.getItem("luka_guest_phone");
-    if (!storedName || !storedPhone) {
-      const welcomeTitle = document.getElementById("welcome-title");
-      if (welcomeTitle) welcomeTitle.innerText = `Table ${window.activeTableNo} Ordering`;
-      const welcomeModal = document.getElementById("welcome-modal");
-      if (welcomeModal) welcomeModal.style.display = "flex";
-    }
-    
-    pollOrderTracking();
-    setInterval(pollOrderTracking, 10000);
+  const tableHeader = document.getElementById("table-number-header");
+  if (tableHeader) {
+    tableHeader.innerHTML = `<span style="color:var(--primary); font-weight:700;"><i class="fas fa-utensils"></i> Table ${table}</span>`;
   }
+  document.getElementById("btn-cart-trigger").style.display = "inline-flex";
+  document.getElementById("btn-track-trigger").style.display = "inline-flex";
+  document.getElementById("welcome-title").innerText = `Table ${table}`;
+
+  try {
+    const storedCart = localStorage.getItem(`luka_cart_table_${table}`);
+    if (storedCart) cart = JSON.parse(storedCart) || {};
+  } catch (e) { cart = {}; }
+  updateCartBadges();
+
+  fetch("/api/settings/public").then(r => r.ok ? r.json() : null).then(cfg => {
+    if (!cfg) return;
+    publicCfg = Object.assign(publicCfg, cfg);
+    const f = document.getElementById("footer-charges");
+    if (f && cfg.service_charge_percent > 0) {
+      f.textContent = `Prices exclude taxes. A ${cfg.service_charge_percent}% service charge may be added to your bill — it is optional and we'll remove it if you ask.`;
+    } else if (f) {
+      f.textContent = "Prices exclude taxes.";
+    }
+  }).catch(() => {});
+
+  if (getToken()) {
+    refreshSession(true);
+  } else {
+    openWelcome();
+  }
+  pollHandle = setInterval(() => { if (getToken() && !document.hidden) refreshSession(false); }, 10000);
 }
+
+// Decide whether to show "start a new order" or "join with PIN"
+function openWelcome(mode) {
+  const modal = document.getElementById("welcome-modal");
+  modal.style.display = "flex";
+  if (mode) return showWelcomeMode(mode);
+  fetch(`/api/table/status?table=${encodeURIComponent(window.activeTableNo)}`)
+    .then(r => r.json())
+    .then(st => showWelcomeMode(st && st.busy ? "join" : "start"))
+    .catch(() => showWelcomeMode("start"));
+}
+
+window.showWelcomeMode = function(mode) {
+  document.getElementById("welcome-guest-form").style.display = mode === "start" ? "block" : "none";
+  document.getElementById("welcome-join-form").style.display = mode === "join" ? "block" : "none";
+  document.getElementById("welcome-error").textContent = "";
+  document.getElementById("join-error").textContent = "";
+  const focus = mode === "join" ? "guest-pin-input" : "guest-name-input";
+  setTimeout(() => { const el = document.getElementById(focus); if (el && window.innerWidth > 640) el.focus(); }, 50);
+};
+
+function closeWelcome() {
+  document.getElementById("welcome-modal").style.display = "none";
+}
+
+// The party's bill was settled or closed by staff: clear everything on this phone
+function endSession(message) {
+  setToken("");
+  tableSession = null;
+  cart = {};
+  try { localStorage.removeItem(`luka_cart_table_${window.activeTableNo}`); } catch (e) {}
+  updateCartBadges();
+  renderSessionUI();
+  closeDrawers();
+  if (message) window.showToast(message, "info");
+  openWelcome();
+}
+
+function refreshSession(first) {
+  return tableFetch(`/api/table/session?table=${encodeURIComponent(window.activeTableNo)}`)
+    .then(sess => {
+      tableSession = sess;
+      closeWelcome();
+      renderSessionUI();
+      if (first) window.showToast(`Welcome back! You're ordering on Table ${window.activeTableNo}.`, "success");
+    })
+    .catch(err => {
+      if (err.code === "no_session") {
+        endSession(first ? "" : "Your bill has been settled. Thank you for dining with us!");
+      } else if (err.code === "not_your_table") {
+        endSession(first ? "" : "This table was closed by our staff.");
+      }
+    });
+}
+
+window.submitWelcomeGuest = function(e) {
+  e.preventDefault();
+  const name = document.getElementById("guest-name-input").value.trim();
+  const phone = document.getElementById("guest-phone-input").value.replace(/\D/g, "");
+  const errEl = document.getElementById("welcome-error");
+  errEl.textContent = "";
+  if (name.length < 2) { errEl.textContent = "Please enter your name."; return; }
+  if (!/^[6-9]\d{9}$/.test(phone)) { errEl.textContent = "Please enter a valid 10-digit mobile number."; return; }
+  const btn = document.getElementById("btn-start-order");
+  btn.disabled = true;
+  tableFetch("/api/table/start", { method: "POST", body: JSON.stringify({ table_no: window.activeTableNo, name, phone }) })
+    .then(res => {
+      setToken(res.token);
+      tableSession = res.session;
+      closeWelcome();
+      renderSessionUI();
+      window.showToast(`Welcome, ${name}! Start ordering on Table ${window.activeTableNo}.`, "success");
+    })
+    .catch(err => {
+      if (err.code === "table_busy") {
+        showWelcomeMode("join");
+      } else {
+        errEl.textContent = err.message;
+      }
+    })
+    .finally(() => { btn.disabled = false; });
+};
+
+window.submitJoinTable = function(e) {
+  e.preventDefault();
+  const pin = document.getElementById("guest-pin-input").value.replace(/\D/g, "");
+  const errEl = document.getElementById("join-error");
+  errEl.textContent = "";
+  tableFetch("/api/table/join", { method: "POST", body: JSON.stringify({ table_no: window.activeTableNo, pin }) })
+    .then(res => {
+      setToken(res.token);
+      tableSession = res.session;
+      closeWelcome();
+      renderSessionUI();
+      window.showToast(`You've joined ${res.session.customer_name}'s table.`, "success");
+    })
+    .catch(err => {
+      if (err.code === "no_session") showWelcomeMode("start");
+      errEl.textContent = err.message;
+    });
+};
 
 function updateCartBadges() {
   const badge = document.getElementById("cart-count-badge");
@@ -761,45 +887,37 @@ function renderCartItems() {
 function submitCartOrder() {
   const itemsArr = Object.values(cart);
   if (itemsArr.length === 0) {
-    alert("Your cart is empty!");
+    window.showToast("Your cart is empty.", "warning");
     return;
   }
-
-  const guestName = sessionStorage.getItem("luka_guest_name") || "Guest";
-  const guestPhone = sessionStorage.getItem("luka_guest_phone") || "";
-
-  fetch("/api/orders", {
+  if (!getToken()) {
+    closeDrawers();
+    openWelcome();
+    return;
+  }
+  const btn = document.getElementById("btn-send-order");
+  btn.disabled = true;
+  tableFetch("/api/orders", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      table_no: window.activeTableNo,
-      customer_name: guestName,
-      customer_phone: guestPhone,
-      items: itemsArr
-    })
-  })
-  .then(async res => {
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.message || "Could not place the order. Please try again.");
-    }
-    return res.json();
+    body: JSON.stringify({ table_no: window.activeTableNo, items: itemsArr.map(i => ({ id: i.id, variant: i.variant, quantity: i.quantity })) })
   })
   .then(data => {
     window.showToast("Order sent to the kitchen!", "success");
     cart = {};
     localStorage.removeItem(`luka_cart_table_${window.activeTableNo}`);
     updateCartBadges();
-    toggleCartDrawer();
-    
+    tableSession = data.session;
+    renderSessionUI();
     toggleTrackingModal(true);
-    pollOrderTracking();
   })
   .catch(err => {
-    window.showToast(err.message, "error");
-  });
+    if (err.code === "no_session" || err.code === "not_your_table") {
+      endSession("Your previous bill was closed. Please start a new order — your cart is kept.");
+    } else {
+      window.showToast(err.message, "error");
+    }
+  })
+  .finally(() => { btn.disabled = false; });
 }
 
 // Live Status Tracking Operations
@@ -818,108 +936,83 @@ function toggleTrackingModal(forceOpen = false) {
   syncDrawerState();
 }
 
-let activeRounds = [];
-function pollOrderTracking() {
-  if (!window.activeTableNo) return;
+function rupees(n) {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  return "₹" + v.toLocaleString("en-IN", { minimumFractionDigits: v % 1 ? 2 : 0, maximumFractionDigits: 2 });
+}
 
-  fetch(`/api/orders?table=${encodeURIComponent(window.activeTableNo)}`)
-    .then(res => res.json())
-    .then(data => {
-      const tableKey = `table_${window.activeTableNo}`;
-      const session = data[tableKey];
-      
-      if (session && session.orders) {
-        activeRounds = session.orders || [];
-        const unservedRounds = activeRounds.filter(r => r.status !== "Served").length;
-        const badge = document.getElementById("tracking-count-badge");
-        if (badge) {
-          if (unservedRounds > 0) {
-            badge.innerText = unservedRounds;
-            badge.style.display = "inline-flex";
-          } else {
-            badge.style.display = "none";
-          }
-        }
-      } else {
-        if (activeRounds.length > 0) {
-          window.showToast("Your table session has been settled! Table is reset.", "info");
-          activeRounds = [];
-          cart = {};
-          localStorage.removeItem(`luka_cart_table_${window.activeTableNo}`);
-          sessionStorage.removeItem("luka_guest_name");
-          sessionStorage.removeItem("luka_guest_phone");
-          updateCartBadges();
-          
-          const badge = document.getElementById("tracking-count-badge");
-          if (badge) badge.style.display = "none";
+function escHTML(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
 
-          // Re-trigger welcome details prompt
-          const welcomeModal = document.getElementById("welcome-modal");
-          if (welcomeModal) welcomeModal.style.display = "flex";
-        }
-      }
-      
-      if (trackingModalOpen) {
-        renderTrackingRounds();
-      }
-    })
-    .catch(err => console.error("Tracking status sync failed:", err));
+// Header badge, PIN and bill button reflect the current session only
+function renderSessionUI() {
+  const rounds = tableSession ? tableSession.orders || [] : [];
+  const badge = document.getElementById("tracking-count-badge");
+  const unserved = rounds.filter(r => r.status !== "Served").length;
+  badge.innerText = unserved;
+  badge.style.display = unserved > 0 ? "inline-flex" : "none";
+  if (trackingModalOpen) renderTrackingRounds();
 }
 
 function renderTrackingRounds() {
   const container = document.getElementById("tracking-rounds-list");
-  const subtotalVal = document.getElementById("tracking-subtotal-val");
-  container.innerHTML = "";
+  const breakdown = document.getElementById("tracking-breakdown");
+  const pinBox = document.getElementById("table-pin-box");
+  const upiBox = document.getElementById("upi-pay-box");
+  const btn = document.getElementById("btn-request-checkout");
+  const rounds = tableSession ? tableSession.orders || [] : [];
 
-  if (activeRounds.length === 0) {
-    container.innerHTML = `<div class="drawer-empty"><i class="fas fa-receipt"></i>No orders yet for this table.</div>`;
-    subtotalVal.innerText = "₹0";
+  pinBox.style.display = tableSession ? "grid" : "none";
+  if (tableSession) document.getElementById("table-pin").textContent = tableSession.pin;
+
+  if (!rounds.length) {
+    container.innerHTML = `<div class="drawer-empty"><i class="fas fa-receipt"></i>No orders yet for your table.</div>`;
+    breakdown.innerHTML = "";
+    upiBox.style.display = "none";
+    btn.style.display = "none";
     return;
   }
+  btn.style.display = "";
 
-  let totalSpent = 0;
-  activeRounds.forEach((round, index) => {
-    const card = document.createElement("div");
-    card.className = "round-card";
-    
-    let timeStr = "";
-    if (round.timestamp && round.timestamp.includes("T")) {
-      timeStr = new Date(round.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-    }
-
-    let statusClass = "received";
-    if (round.status === "Preparing") statusClass = "preparing";
-    if (round.status === "Ready") statusClass = "ready";
-    if (round.status === "Served") statusClass = "served";
-
-    card.innerHTML = `
+  container.innerHTML = rounds.map((round, index) => {
+    const timeStr = round.timestamp ? new Date(round.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "";
+    const cls = { Preparing: "preparing", Ready: "ready", Served: "served" }[round.status] || "received";
+    return `<div class="round-card">
       <div class="round-header">
         <span style="font-weight:700;">Round ${index + 1} <span style="color:var(--text-muted);font-weight:500;">· ${timeStr}</span></span>
-        <span class="status-pill ${statusClass}">${round.status}</span>
+        <span class="status-pill ${cls}">${escHTML(round.status)}</span>
       </div>
-      ${round.items.map(i => {
-        const lineCost = i.price * i.quantity;
-        totalSpent += lineCost;
-        return `<div class="round-line"><span><strong style="color:var(--primary);">${i.quantity}×</strong> ${i.name} <span style="color:var(--text-muted);font-size:12.5px;">· ${i.variant}</span></span><span>₹${lineCost}</span></div>`;
-      }).join("")}
-    `;
-    container.appendChild(card);
-  });
+      ${round.items.map(i => `<div class="round-line"><span><strong style="color:var(--primary);">${i.quantity}×</strong> ${escHTML(i.name)} <span style="color:var(--text-muted);font-size:12.5px;">· ${escHTML(i.variant)}</span></span><span>${rupees(i.price * i.quantity)}</span></div>`).join("")}
+    </div>`;
+  }).join("");
 
-  const r2 = n => Math.round(n * 100) / 100;
-  const serviceCharge = r2(totalSpent * 0.10);
-  const tax = r2(totalSpent * 0.05);
-  const grandTotal = r2(totalSpent + serviceCharge + tax);
+  const b = tableSession.bill;
+  const rows = [[`Subtotal`, rupees(b.subtotal)]];
+  if (b.discount > 0) rows.push([`Discount`, "− " + rupees(b.discount), "discount"]);
+  if (b.service_charge > 0) rows.push([`Service charge ${b.service_charge_percent}% <small>(optional)</small>`, rupees(b.service_charge)]);
+  if (b.cgst > 0) rows.push([`CGST ${b.gst_percent / 2}%`, rupees(b.cgst)]);
+  if (b.sgst > 0) rows.push([`SGST ${b.gst_percent / 2}%`, rupees(b.sgst)]);
+  if (b.vat > 0) rows.push([`VAT on liquor ${b.liquor_vat_percent}%`, rupees(b.vat)]);
+  if (Math.abs(b.round_off) > 0.001) rows.push([`Round off`, rupees(b.round_off)]);
+  breakdown.innerHTML = rows.map(([k, v, c]) => `<div class="bill-row ${c || ""}"><span>${k}</span><span>${v}</span></div>`).join("") +
+    `<div class="drawer-total" style="margin:6px 0 0; padding-top:8px; border-top:1px solid var(--border-color);"><span>${tableSession.status === "Checkout Requested" ? "Total to pay" : "Total so far"}</span><span>${rupees(b.total)}</span></div>`;
 
-  const subtotalEl = document.getElementById("tracking-subtotal-val");
-  const svcEl = document.getElementById("tracking-service-charge-val");
-  const taxEl = document.getElementById("tracking-tax-val");
-  const totalEl = document.getElementById("tracking-total-val");
+  const billAsked = tableSession.status === "Checkout Requested";
+  btn.disabled = billAsked;
+  btn.innerHTML = billAsked ? `<i class="fas fa-check"></i> Bill requested — staff are on the way` : `<i class="fas fa-file-invoice-dollar"></i> Ask for the Bill`;
 
-  if (subtotalEl) subtotalEl.innerText = `₹${totalSpent}`;
-  if (svcEl) svcEl.innerText = `₹${serviceCharge}`;
-  if (taxEl) taxEl.innerText = `₹${tax}`;
-  if (totalEl) totalEl.innerText = `₹${grandTotal}`;
+  // UPI: shown once the guest asks for the bill
+  if (billAsked && publicCfg.upi_id && window.UPI) {
+    const link = window.UPI.link(publicCfg.upi_id, publicCfg.upi_name, b.total, `Table ${window.activeTableNo} bill`);
+    window.UPI.renderQR(document.getElementById("upi-qr"), link, 200);
+    document.getElementById("upi-app-link").href = link;
+    document.getElementById("upi-amount").textContent = rupees(b.total);
+    document.getElementById("upi-payee").textContent = publicCfg.upi_name || publicCfg.upi_id;
+    upiBox.style.display = "flex";
+  } else {
+    upiBox.style.display = "none";
+  }
 }
 
 window.openItemModalFromCard = function(itemId) {
@@ -928,46 +1021,18 @@ window.openItemModalFromCard = function(itemId) {
 };
 
 function requestCustomerCheckout() {
-  if (!window.activeTableNo) return;
-
+  if (!window.activeTableNo || !getToken()) return;
   const btn = document.getElementById("btn-request-checkout");
   btn.disabled = true;
-  btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Processing...`;
-
-  fetch("/api/orders/request-checkout", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ table_no: window.activeTableNo })
-  })
-  .then(res => {
-    if (!res.ok) throw new Error("Checkout request failed.");
-    return res.json();
-  })
-  .then(data => {
-    window.showToast("Checkout requested! Staff has been notified to settle your bill.", "success");
-    btn.innerHTML = `<i class="fas fa-check"></i> Bill requested — staff are on the way`;
-  })
-  .catch(err => {
-    window.showToast(err.message, "error");
-    btn.disabled = false;
-    btn.innerHTML = `<i class="fas fa-file-invoice-dollar"></i> Ask for the Bill`;
-  });
+  btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Sending…`;
+  tableFetch("/api/orders/request-checkout", { method: "POST", body: JSON.stringify({ table_no: window.activeTableNo }) })
+    .then(data => {
+      tableSession = data.session;
+      window.showToast("Bill requested — our staff will be with you shortly.", "success");
+      renderTrackingRounds();
+    })
+    .catch(err => {
+      if (err.code === "no_session" || err.code === "not_your_table") endSession("This bill was already closed.");
+      else { window.showToast(err.message, "error"); btn.disabled = false; renderTrackingRounds(); }
+    });
 }
-
-window.submitWelcomeGuest = function(e) {
-  e.preventDefault();
-  const name = document.getElementById("guest-name-input").value.trim();
-  const phone = document.getElementById("guest-phone-input").value.trim();
-  
-  if (name && phone) {
-    sessionStorage.setItem("luka_guest_name", name);
-    sessionStorage.setItem("luka_guest_phone", phone);
-    
-    const welcomeModal = document.getElementById("welcome-modal");
-    if (welcomeModal) welcomeModal.style.display = "none";
-    
-    window.showToast(`Welcome, ${name}! Start ordering directly to Table ${window.activeTableNo}.`, "success");
-  }
-};

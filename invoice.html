@@ -300,7 +300,7 @@
       <!-- Metadata Box -->
       <div class="meta-section">
         <div class="meta-row">
-          <span>Invoice ID:</span>
+          <span>Invoice No:</span>
           <span class="meta-value" id="val-invoice-id">N/A</span>
         </div>
         <div class="meta-row">
@@ -328,24 +328,7 @@
       </div>
 
       <!-- Totals Breakdown -->
-      <div class="summary-section">
-        <div class="summary-row">
-          <span>Subtotal</span>
-          <span id="val-subtotal">₹0</span>
-        </div>
-        <div class="summary-row">
-          <span>Service Charge (10%)</span>
-          <span id="val-service">₹0</span>
-        </div>
-        <div class="summary-row">
-          <span>Taxes (5%)</span>
-          <span id="val-tax">₹0</span>
-        </div>
-        <div class="summary-row total">
-          <span>GRAND TOTAL</span>
-          <span id="val-total">₹0</span>
-        </div>
-      </div>
+      <div class="summary-section" id="summary-rows"></div>
 
       <!-- Payments -->
       <div id="payments-block" style="display:none; margin-bottom: 20px;">
@@ -416,7 +399,12 @@
     }
 
     function populateInvoice(inv) {
-      document.getElementById("val-invoice-id").innerText = inv.invoice_id;
+      document.getElementById("val-invoice-id").innerText = inv.invoice_no || inv.invoice_id;
+      if (inv.seller) {
+        if (inv.seller.name) document.getElementById("val-biz-name").textContent = inv.seller.name.toUpperCase();
+        document.getElementById("val-biz-sub").textContent = [inv.seller.address, inv.seller.gstin ? "GSTIN " + inv.seller.gstin : "", inv.seller.sac ? "SAC " + inv.seller.sac : ""].filter(Boolean).join(" · ");
+      }
+      if (inv.invoice_no) document.querySelector(".items-title").textContent = "Tax Invoice — Items";
       document.getElementById("val-table-no").innerText = `Table ${inv.table_no}`;
       document.getElementById("val-guest-name").innerText = inv.customer_name || 'Guest';
       document.getElementById("val-guest-phone").innerText = inv.customer_phone || 'N/A';
@@ -445,10 +433,19 @@
         document.getElementById("payments-block").style.display = "block";
       }
 
-      document.getElementById("val-subtotal").innerText = money(inv.subtotal);
-      document.getElementById("val-service").innerText = money(inv.service_charge);
-      document.getElementById("val-tax").innerText = money(inv.tax);
-      document.getElementById("val-total").innerText = money(inv.total);
+      const rows = [["Subtotal", money(inv.subtotal)]];
+      if (inv.discount > 0) rows.push(["Discount", "− " + money(inv.discount)]);
+      if (inv.service_charge > 0) rows.push([`Service charge${inv.service_charge_percent ? " " + inv.service_charge_percent + "%" : ""}`, money(inv.service_charge)]);
+      if (inv.cgst != null) {
+        if (inv.cgst > 0) rows.push([`CGST ${inv.gst_percent / 2}%`, money(inv.cgst)]);
+        if (inv.sgst > 0) rows.push([`SGST ${inv.gst_percent / 2}%`, money(inv.sgst)]);
+        if (inv.vat > 0) rows.push([`VAT on liquor ${inv.liquor_vat_percent}%`, money(inv.vat)]);
+        if (Math.abs(inv.round_off || 0) > 0.001) rows.push(["Round off", money(inv.round_off)]);
+      } else {
+        rows.push(["Taxes", money(inv.tax)]);
+      }
+      document.getElementById("summary-rows").innerHTML = rows.map(([k, v]) => `<div class="summary-row"><span>${k}</span><span>${v}</span></div>`).join("") +
+        `<div class="summary-row total"><span>GRAND TOTAL</span><span>${money(inv.total)}</span></div>`;
 
       document.getElementById("invoice-loading").style.display = "none";
       document.getElementById("invoice-content").style.display = "block";
@@ -463,7 +460,7 @@
 
       const opt = {
         margin:       0.3,
-        filename:     `${invoiceData.invoice_id}.pdf`,
+        filename:     `${(invoiceData.invoice_no || invoiceData.invoice_id).replace(/\//g, "-")}.pdf`,
         image:        { type: 'jpeg', quality: 0.98 },
         html2canvas:  { scale: 2, backgroundColor: '#18181b', logging: false },
         jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' }
