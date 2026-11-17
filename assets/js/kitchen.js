@@ -1,6 +1,6 @@
 /**
  * kitchen.js — Kitchen Display System (KDS) Logic
- * Downtown Luka v1.1
+ * Mosaic Engine HMS
  */
 
 // ─── State ──────────────────────────────────────────────────────────────────
@@ -43,10 +43,7 @@ function kdsClearLocalLogin() {
 })();
 
 function kdsShowApp(user) {
-  // Outlet name from Settings; kitchen staff don't get a link back to the admin panel
-  fetch("/api/settings/public").then(r => r.ok ? r.json() : null).then(s => {
-    if (s && s.business_name) document.getElementById("kds-outlet-name").textContent = s.business_name;
-  }).catch(() => {});
+  // Kitchen staff don't get a link back to the admin panel
   const role = sessionStorage.getItem("luka_logged_role");
   const adminLink = document.getElementById("kds-admin-link");
   if (adminLink) adminLink.style.display = role === "Kitchen" ? "none" : "";

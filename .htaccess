@@ -23,6 +23,23 @@ RewriteRule (^|/)\. - [F,L]
 # Block the Python dev-server cache folder
 RewriteRule ^__pycache__(/|$) - [F,L]
 
+# ─── Caching: always fetch fresh pages, scripts and styles after a deploy ───
+# (Stops Hostinger/LiteSpeed and browsers serving an old admin.js with a new admin.html)
+<IfModule mod_headers.c>
+    <FilesMatch "\.(html|htm|php)$">
+        Header set Cache-Control "no-cache, no-store, must-revalidate"
+        Header set Pragma "no-cache"
+        Header set Expires "0"
+    </FilesMatch>
+    <FilesMatch "\.(css|js|svg)$">
+        Header set Cache-Control "no-cache, must-revalidate"
+    </FilesMatch>
+</IfModule>
+# Tell Hostinger's LiteSpeed page cache not to store any page of this app
+<IfModule LiteSpeed>
+    RewriteRule .* - [E=Cache-Control:no-cache]
+</IfModule>
+
 # No folder listings
 Options -Indexes
 
