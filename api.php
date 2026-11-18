@@ -5,6 +5,9 @@
  * Handles all GET/POST requests routed from /api/* via .htaccess.
  */
 
+// All "today" / day boundaries are Indian Standard Time. Stored timestamps stay UTC (…Z).
+date_default_timezone_set('Asia/Kolkata');
+
 // ─── Headers ────────────────────────────────────────────────────────────────
 // Same-origin only: the site and the API live on the same domain, so no CORS
 // headers are sent. This stops other websites from calling the API with a
@@ -171,13 +174,190 @@ function default_settings() {
         // UPI
         "upi_id"               => "",
         "upi_name"             => "",
+        // ── Kitchen ERP rules (editable by roles with "Edit settings & limits") ──
+        "costing_basis"        => "avg",     // "avg" weighted average or "last" purchase rate
+        "target_food_cost"     => 28,        // %
+        "expiry_alert_days"    => 2,
+        "waste_limit"          => 500,       // ₹ — wastage above this needs approval
+        "waste_reasons"        => ["Spoilage", "Trim", "Burnt", "Returned plate", "Expired", "Beer spillage / line clean"],
+        "po_limit"             => 10000,     // ₹ — POs above this need approval
+        "rate_variance_pct"    => 5,         // flag invoice rate above PO rate by this %
+        "qty_tolerance_pct"    => 5,         // max over-delivery accepted at receipt
+        "max_discount_pct"     => 15,        // above this only Admin/Owner can apply a discount
+        "kds_warn_pct"         => 70,        // ticket turns amber at this % of target time
+        "kds_stale_min"        => 30,        // ticket escalates after this many minutes
+        "block_bill_until_served" => true,   // no bill while food is still pending
+        "stations"             => ["Fry", "Cold", "Hot", "Bar"],
+        "aggregator_markup"    => 15,        // % added to online prices
+        "aggregator_commission" => 22,       // % taken by Swiggy / Zomato
+        "auto_accept_online"   => true,
+        "owner_whatsapp"       => "",        // for the daily summary
+        "integration_key"      => "",        // for webhooks (aggregator middleware, sensors, biometric)
+        "temp_limits"          => [
+            ["name" => "Walk-in chiller", "max" => 5],
+            ["name" => "Keg room", "max" => 5],
+            ["name" => "Deep freezer", "max" => -18],
+            ["name" => "Hot holding", "min" => 63],
+        ],
+        "checklist_items"      => ["Chiller & keg-room temperatures logged", "Beer lines flushed", "Hand-wash stations stocked",
+                                   "Pest-control traps checked", "Raw and cooked items stored apart", "Floor and drains cleaned"],
     ];
 }
 
-function get_settings() {
+// Company-wide settings, exactly as saved (what the Settings page edits)
+function get_company_settings() {
     $s = array_replace(default_settings(), read_json("settings.json", []));
     $s['payment_methods'] = array_replace(default_settings()['payment_methods'], is_array($s['payment_methods']) ? $s['payment_methods'] : []);
     return $s;
+}
+
+// Settings for the outlet this request is about: company defaults, with
+// anything the outlet overrides (name, address, GSTIN, tables, service charge,
+// invoice prefix). Blank outlet values inherit the company value.
+function get_settings() {
+    $s = get_company_settings();
+    $o = outlet_by_id(current_outlet());
+    if ($o && isset($o['overrides']) && is_array($o['overrides'])) {
+        foreach (outlet_override_keys() as $k) {
+            if (isset($o['overrides'][$k]) && $o['overrides'][$k] !== '' && $o['overrides'][$k] !== null) $s[$k] = $o['overrides'][$k];
+        }
+    }
+    return $s;
+}
+
+// ─── Outlets ────────────────────────────────────────────────────────────────
+function outlet_override_keys() {
+    return ['business_name', 'business_address', 'business_phone', 'gstin', 'tables_count', 'service_charge_percent', 'invoice_prefix'];
+}
+
+function load_outlets() {
+    $list = read_json("outlets.json", []);
+    $has_main = false;
+    foreach ($list as $o) if ($o['id'] === 'main') $has_main = true;
+    if (!$has_main) {
+        array_unshift($list, ["id" => "main", "name" => get_company_settings()['business_name'], "type" => "Restaurant", "overrides" => []]);
+    }
+    return $list;
+}
+
+function outlet_by_id($id) {
+    foreach (load_outlets() as $o) if ($o['id'] === $id) return $o;
+    return null;
+}
+
+// Which outlet this request is for: staff pick one (stored in their session);
+// guests' QR links carry ?outlet=ID. The first outlet ("main") is the default.
+function current_outlet() {
+    static $cur = null;
+    if ($cur !== null) return $cur;
+    $cur = 'main';
+    $cand = null;
+    if (isset($_SESSION['staff_user']) && isset($_SESSION['outlet'])) $cand = $_SESSION['outlet'];
+    elseif (isset($_GET['outlet'])) $cand = $_GET['outlet'];
+    else {
+        $in = json_decode(file_get_contents("php://input"), true);
+        if (is_array($in) && isset($in['outlet'])) $cand = $in['outlet'];
+    }
+    if (is_string($cand) && preg_match('/^[a-z0-9-]{1,24}$/', $cand)) {
+        foreach (read_json("outlets.json", []) as $o) if ($o['id'] === $cand) $cur = $cand;
+    }
+    return $cur;
+}
+
+function table_key($table_no, $outlet = null) {
+    $o = $outlet === null ? current_outlet() : $outlet;
+    return $o === 'main' ? "table_" . $table_no : "o_" . $o . "_table_" . $table_no;
+}
+
+function session_outlet($s) {
+    return isset($s['outlet_id']) ? $s['outlet_id'] : 'main';
+}
+
+function invoice_outlet($inv) {
+    return isset($inv['outlet_id']) ? $inv['outlet_id'] : 'main';
+}
+
+// Invoices for the active outlet within the selected period (?days=1|7|30…)
+function period_days($default = 30) {
+    $d = isset($_GET['days']) ? intval($_GET['days']) : $default;
+    return max(1, min(366, $d));
+}
+
+function period_start($days) {
+    return strtotime('today') - ($days - 1) * 86400;
+}
+
+function period_invoices($days = null) {
+    $days = $days === null ? period_days() : $days;
+    $start = period_start($days);
+    return array_values(array_filter(outlet_invoices(), function($i) use ($start) { return strtotime($i['timestamp']) >= $start; }));
+}
+
+// Invoices for the active outlet (Admin/Owner can ask for all outlets)
+function outlet_invoices($all = false) {
+    $inv = read_json("invoices.json", []);
+    if ($all) return $inv;
+    $o = current_outlet();
+    return array_values(array_filter($inv, function($i) use ($o) { return invoice_outlet($i) === $o; }));
+}
+
+// ─── Action permissions (configurable per role) ────────────────────────────
+function perm_labels() {
+    return [
+        "discount" => "Apply discount", "void" => "Void items & close tables", "approvePO" => "Approve purchase orders",
+        "approveWaste" => "Approve wastage", "stockCount" => "Post stock counts & issues", "editRecipe" => "Edit recipes & costs",
+        "viewMobile" => "See full customer mobile", "editSettings" => "Edit settings & limits",
+    ];
+}
+
+function default_perms() {
+    return [
+        "Owner"        => ["discount" => true, "void" => true, "approvePO" => true, "approveWaste" => true, "stockCount" => true, "editRecipe" => true, "viewMobile" => true, "editSettings" => false],
+        "Receptionist" => ["discount" => true, "void" => true, "approvePO" => false, "approveWaste" => false, "stockCount" => true, "editRecipe" => false, "viewMobile" => false, "editSettings" => false],
+        "Waiter"       => ["discount" => false, "void" => false, "approvePO" => false, "approveWaste" => false, "stockCount" => false, "editRecipe" => false, "viewMobile" => false, "editSettings" => false],
+        "Kitchen"      => ["discount" => false, "void" => false, "approvePO" => false, "approveWaste" => true, "stockCount" => true, "editRecipe" => true, "viewMobile" => false, "editSettings" => false],
+    ];
+}
+
+function load_perms() {
+    $saved = read_json("permissions.json", []);
+    $out = [];
+    foreach (default_perms() as $role => $p) {
+        $out[$role] = array_replace($p, isset($saved[$role]) && is_array($saved[$role]) ? array_intersect_key($saved[$role], $p) : []);
+    }
+    $out["Admin"] = array_fill_keys(array_keys(perm_labels()), true);   // Admin can always do everything
+    return $out;
+}
+
+function perms_for_role($role) {
+    $all = load_perms();
+    return isset($all[$role]) ? $all[$role] : array_fill_keys(array_keys(perm_labels()), false);
+}
+
+function has_perm($username, $perm) {
+    $role = get_user_role($username);
+    if ($role === null) return false;
+    $p = perms_for_role($role);
+    return !empty($p[$perm]);
+}
+
+function require_perm($username, $perm) {
+    if ($username === null || get_user_role($username) === null) {
+        http_response_code(401);
+        echo json_encode(["status" => "error", "message" => "Please log in again."]);
+        exit;
+    }
+    if (!has_perm($username, $perm)) {
+        http_response_code(403);
+        echo json_encode(["status" => "error", "message" => "Your role does not have permission to " . strtolower(perm_labels()[$perm]) . "."]);
+        exit;
+    }
+}
+
+// Customer mobile numbers are masked for roles without "See full customer mobile"
+function show_phone($phone, $username) {
+    if ($phone === '' || $phone === null) return '';
+    return has_perm($username, 'viewMobile') ? $phone : substr($phone, 0, 2) . str_repeat('X', max(0, strlen($phone) - 5)) . substr($phone, -3);
 }
 
 function enabled_payment_methods() {
@@ -261,6 +441,7 @@ function new_session($table_no, $name, $phone) {
         "pin" => str_pad((string)random_int(0, 9999), 4, "0", STR_PAD_LEFT),
         "customer_name" => $name,
         "customer_phone" => $phone,
+        "outlet_id" => current_outlet(),
         "status" => "Active",
         "started_at" => gmdate("Y-m-d\TH:i:s\Z"),
         "service_charge_on" => true,
@@ -299,7 +480,7 @@ function table_token() {
 
 // For guest requests: returns the session key only if the token matches
 function guest_session_key($active, $table_no) {
-    $key = "table_" . $table_no;
+    $key = table_key($table_no);
     $tok = table_token();
     if ($table_no === '' || !isset($active[$key])) {
         http_response_code(404);
@@ -312,6 +493,11 @@ function guest_session_key($active, $table_no) {
         exit;
     }
     return $key;
+}
+
+function all_rounds_served($s) {
+    foreach ($s['orders'] as $o) if ((isset($o['status']) ? $o['status'] : 'Received') !== 'Served') return false;
+    return true;
 }
 
 // What a guest is allowed to see about their own session
@@ -447,6 +633,27 @@ function load_customers() {
     return read_json("customers.json", []);
 }
 
+// Opaque, stable ID so screens can open a customer without seeing the number
+function customer_id($phone) {
+    return substr(hash_hmac('sha256', $phone, customer_secret()), 0, 16);
+}
+
+function customer_secret() {
+    $st = get_company_settings();
+    if (empty($st['integration_key'])) {
+        $raw = read_json("settings.json", []);
+        $raw['integration_key'] = bin2hex(random_bytes(20));
+        write_json("settings.json", $raw);
+        return $raw['integration_key'];
+    }
+    return $st['integration_key'];
+}
+
+function customer_phone_from_id($id, $customers) {
+    foreach ($customers as $ph => $c) if (customer_id((string)$ph) === $id) return (string)$ph;
+    return '';
+}
+
 function customer_visit($phone, $name) {
     if (!valid_indian_mobile($phone)) return;
     $c = load_customers();
@@ -494,7 +701,9 @@ function bom_requirements($items) {
         foreach ($bom[$id][$variant] as $ing) {
             $mid = isset($ing['material_id']) ? $ing['material_id'] : '';
             if ($mid === '') continue;
-            $need[$mid] = (isset($need[$mid]) ? $need[$mid] : 0) + floatval($ing['qty']) * $qty;
+            // Yield / trim loss: 0.2 kg at 10% loss uses 0.22 kg of stock
+            $loss = isset($ing['loss_pct']) ? floatval($ing['loss_pct']) : 0;
+            $need[$mid] = (isset($need[$mid]) ? $need[$mid] : 0) + floatval($ing['qty']) * (1 + $loss / 100) * $qty;
         }
     }
     return $need;
@@ -525,7 +734,11 @@ function bom_deduct($items, $reason, $user, $sign = 1) {
     $entries = [];
     foreach ($inv['materials'] as &$m) {
         if (!isset($need[$m['id']])) continue;
-        $m['stock'] = round(floatval($m['stock']) - $sign * $need[$m['id']], 3);
+        $amt = $need[$m['id']];
+        $k = isset($m['kitchen_stock']) ? floatval($m['kitchen_stock']) : 0;
+        // Sales come out of the kitchen / bar first, then the main store
+        $m['kitchen_stock'] = $sign > 0 ? round(max(0, $k - $amt), 3) : round($k + $amt, 3);
+        $m['stock'] = round(floatval($m['stock']) - $sign * $amt, 3);
         $entries[] = [
             "timestamp"   => gmdate("Y-m-d\TH:i:s\Z"),
             "material_id" => $m['id'],
@@ -601,6 +814,10 @@ function lookup_menu_item($item_id, $variant_label) {
     }
     return null;
 }
+
+// Kitchen ERP modules (costing, stock, wastage, production, approvals, stations,
+// takeaway/delivery, P&L, staff, food safety, outlets, permissions)
+require __DIR__ . '/api_erp.php';
 
 // ─── Uploaded media (served from the data folder) ────────────────────────────
 if (strpos($route, 'media/') === 0) {
@@ -754,7 +971,9 @@ switch ($route) {
     case 'session':
         $role = get_user_role($staff_user);
         if ($staff_user !== null && $role !== null) {
-            echo json_encode(["authenticated" => true, "username" => $staff_user, "role" => $role]);
+            $o = outlet_by_id(current_outlet());
+            echo json_encode(["authenticated" => true, "username" => $staff_user, "role" => $role, "perms" => perms_for_role($role),
+                              "outlet" => ["id" => $o['id'], "name" => $o['name']], "outlets" => array_map(function($x) { return ["id" => $x['id'], "name" => $x['name'], "type" => $x['type']]; }, load_outlets())]);
         } else {
             echo json_encode(["authenticated" => false]);
         }
@@ -840,7 +1059,7 @@ switch ($route) {
     case 'table/status':
         $table_no = clean_table_no(isset($_GET['table']) ? $_GET['table'] : '');
         $active = load_sessions();
-        echo json_encode(["table_no" => $table_no, "busy" => $table_no !== '' && isset($active["table_" . $table_no])]);
+        echo json_encode(["table_no" => $table_no, "busy" => $table_no !== '' && isset($active[table_key($table_no)])]);
         break;
 
     // 6b. POST /api/table/start {table_no, name, phone} — open a new party's tab
@@ -854,7 +1073,7 @@ switch ($route) {
         if (mb_strlen($name) < 2) { http_response_code(400); echo json_encode(["status" => "error", "message" => "Please enter your name."]); exit; }
         if (!valid_indian_mobile($phone)) { http_response_code(400); echo json_encode(["status" => "error", "message" => "Please enter a valid 10-digit mobile number."]); exit; }
         $active = load_sessions();
-        $key = "table_" . $table_no;
+        $key = table_key($table_no);
         if (isset($active[$key])) {
             http_response_code(409);
             echo json_encode(["status" => "error", "code" => "table_busy", "message" => "This table already has an open bill. If you're with that group, enter the table PIN. Otherwise please ask our staff."]);
@@ -880,7 +1099,7 @@ switch ($route) {
             exit;
         }
         $active = load_sessions();
-        $key = "table_" . $table_no;
+        $key = table_key($table_no);
         if (!isset($active[$key])) { http_response_code(404); echo json_encode(["status" => "error", "code" => "no_session", "message" => "This table has no open bill. Start a new order instead."]); exit; }
         if (!hash_equals($active[$key]['pin'], $pin)) {
             rate_fail($rl, 600);
@@ -908,8 +1127,11 @@ switch ($route) {
             $active = load_sessions();
             $out = [];
             foreach ($active as $k => $sess) {
+                if (session_outlet($sess) !== current_outlet()) continue;
                 unset($sess['token']);                 // staff never need the guest's secret
                 $sess['bill_total'] = compute_bill($sess)['total'];
+                $sess['customer_phone'] = show_phone($sess['customer_phone'], $staff_user);
+                $sess['all_served'] = all_rounds_served($sess);
                 $out[$k] = $sess;
             }
             echo json_encode((object)$out);
@@ -978,7 +1200,7 @@ switch ($route) {
                 http_response_code(400); echo json_encode(["status" => "error", "message" => "Unknown status."]); exit;
             }
             $active = load_sessions();
-            $key = "table_" . $table_no;
+            $key = table_key($table_no);
             $updated = false;
             if (isset($active[$key])) {
                 foreach ($active[$key]['orders'] as &$o) {
@@ -1021,8 +1243,8 @@ switch ($route) {
         require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
         $table_no = clean_table_no(isset($_GET['table']) ? $_GET['table'] : '');
         $active = load_sessions();
-        if (!isset($active["table_" . $table_no])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "No open bill on this table."]); exit; }
-        echo json_encode(compute_bill($active["table_" . $table_no]));
+        if (!isset($active[table_key($table_no)])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "No open bill on this table."]); exit; }
+        echo json_encode(compute_bill($active[table_key($table_no)]));
         break;
 
     // 8c. POST /api/orders/adjust {table_no, service_charge_on?, discount?} — before settling
@@ -1032,7 +1254,7 @@ switch ($route) {
         $input = json_decode(file_get_contents("php://input"), true);
         $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
         $active = load_sessions();
-        $key = "table_" . $table_no;
+        $key = table_key($table_no);
         if (!isset($active[$key])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "No open bill on this table."]); exit; }
         $notes = [];
         if (array_key_exists('service_charge_on', $input)) {
@@ -1043,6 +1265,7 @@ switch ($route) {
             }
         }
         if (array_key_exists('discount', $input)) {
+            require_perm($staff_user, 'discount');
             $d = $input['discount'];
             if ($d === null || (is_array($d) && floatval(isset($d['value']) ? $d['value'] : 0) <= 0)) {
                 if ($active[$key]['discount'] !== null) $notes[] = "removed discount";
@@ -1053,6 +1276,15 @@ switch ($route) {
                 $reason = clean_text(isset($d['reason']) ? $d['reason'] : '', 80);
                 if ($reason === '') { http_response_code(400); echo json_encode(["status" => "error", "message" => "Enter a reason for the discount."]); exit; }
                 if ($type === 'pct' && $val > 100) { http_response_code(400); echo json_encode(["status" => "error", "message" => "Discount cannot be more than 100%."]); exit; }
+                // Value limit: bigger discounts need an Admin or Owner
+                $sub = compute_bill($active[$key])['subtotal'];
+                $pct = $type === 'pct' ? $val : ($sub > 0 ? $val / $sub * 100 : 100);
+                $maxd = floatval(get_settings()['max_discount_pct']);
+                if ($pct > $maxd + 0.001 && !in_array(get_user_role($staff_user), ['Admin', 'Owner'], true)) {
+                    http_response_code(403);
+                    echo json_encode(["status" => "error", "message" => "Discounts above $maxd% need an Admin or Owner."]);
+                    exit;
+                }
                 $active[$key]['discount'] = ["type" => $type, "value" => $val, "reason" => $reason, "by" => $staff_user];
                 $notes[] = "discount " . ($type === 'pct' ? "$val%" : "₹$val") . " ($reason)";
             }
@@ -1065,7 +1297,7 @@ switch ($route) {
     // 8d. POST /api/orders/void-item {table_no, order_id, index, qty, reason}
     case 'orders/void-item':
         if ($method !== 'POST') break;
-        require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+        require_perm($staff_user, 'void');
         $input = json_decode(file_get_contents("php://input"), true);
         $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
         $order_id = isset($input['order_id']) ? (string)$input['order_id'] : '';
@@ -1074,7 +1306,7 @@ switch ($route) {
         $reason = clean_text(isset($input['reason']) ? $input['reason'] : '', 80);
         if ($reason === '') { http_response_code(400); echo json_encode(["status" => "error", "message" => "Enter a reason for the void."]); exit; }
         $active = load_sessions();
-        $key = "table_" . $table_no;
+        $key = table_key($table_no);
         $voided = null;
         if (isset($active[$key])) {
             foreach ($active[$key]['orders'] as $oi => &$o) {
@@ -1103,13 +1335,13 @@ switch ($route) {
     // 8e. POST /api/orders/close-table {table_no, reason} — end a session without billing
     case 'orders/close-table':
         if ($method !== 'POST') break;
-        require_role($staff_user, ['Admin', 'Owner']);
+        require_perm($staff_user, 'void');
         $input = json_decode(file_get_contents("php://input"), true);
         $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
         $reason = clean_text(isset($input['reason']) ? $input['reason'] : '', 80);
         if ($reason === '') { http_response_code(400); echo json_encode(["status" => "error", "message" => "Enter a reason for closing the table without a bill."]); exit; }
         $active = load_sessions();
-        $key = "table_" . $table_no;
+        $key = table_key($table_no);
         if (!isset($active[$key])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "Table is already free."]); exit; }
         $sess = $active[$key];
         $bill = compute_bill($sess);
@@ -1131,7 +1363,7 @@ switch ($route) {
             $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
 
             $active = load_sessions();
-            $key = "table_" . $table_no;
+            $key = table_key($table_no);
             if ($table_no === '' || !isset($active[$key])) {
                 http_response_code(404);
                 echo json_encode(["status" => "error", "message" => "No active session for Table $table_no"]);
@@ -1143,6 +1375,11 @@ switch ($route) {
             if (count($bill['items']) === 0) {
                 http_response_code(400);
                 echo json_encode(["status" => "error", "message" => "This table has no items to bill. Use “Close table” instead."]);
+                exit;
+            }
+            if (!empty($settings['block_bill_until_served']) && !all_rounds_served($session)) {
+                http_response_code(409);
+                echo json_encode(["status" => "error", "message" => "Some food for Table $table_no is still being prepared. Mark every round Served before settling the bill."]);
                 exit;
             }
             $total = $bill['total'];
@@ -1209,9 +1446,12 @@ switch ($route) {
                 "payments" => $payments,
                 "payment_mode" => $payment_mode,
                 "voids" => $session['voids'],
-                "settled_by" => $staff_user
+                "settled_by" => $staff_user,
+                "outlet_id" => current_outlet(),
+                "channel" => "Dine-in"
             ]);
 
+            $invoice = add_cost_snapshot($invoice);
             $invoices[] = $invoice;
             write_json("invoices.json", $invoices);
             unset($active[$key]);
@@ -1244,10 +1484,13 @@ switch ($route) {
     case 'invoices':
         if ($method === 'GET') {
             require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
-            $invoices = read_json("invoices.json", []);
+            $all = !empty($_GET['all']) && in_array(get_user_role($staff_user), ['Admin', 'Owner'], true);
+            $invoices = outlet_invoices($all);
             usort($invoices, function($a, $b) {
                 return strcmp($b['timestamp'], $a['timestamp']); // newest first
             });
+            foreach ($invoices as &$inv) $inv['customer_phone'] = show_phone(isset($inv['customer_phone']) ? $inv['customer_phone'] : '', $staff_user);
+            unset($inv);
             echo json_encode($invoices);
         }
         break;
@@ -1276,49 +1519,107 @@ switch ($route) {
     case 'kitchen/orders':
         if ($method === 'GET') {
             require_role($staff_user, ['Admin', 'Owner', 'Kitchen']);
+            $st = get_settings();
             $active = read_json("active_orders.json", []);
             $flat = [];
-            foreach ($active as $table_key => $table_data) {
-                if (!is_array($table_data)) continue;
+            $now = time();
+            $escalate = [];
+            foreach ($active as $tk => $table_data) {
+                if (!is_array($table_data) || session_outlet($table_data) !== current_outlet()) continue;
                 foreach ($table_data['orders'] as $idx => $order) {
-                    $flat[] = [
+                    $flat[] = kitchen_ticket([
                         "order_id" => $order['order_id'],
-                        "table_no" => isset($table_data['table_no']) ? $table_data['table_no'] : str_replace("table_", "", $table_key),
+                        "table_no" => isset($table_data['table_no']) ? $table_data['table_no'] : str_replace("table_", "", $tk),
+                        "label" => "Table " . (isset($table_data['table_no']) ? $table_data['table_no'] : ''),
+                        "channel" => "Dine-in",
                         "customer_name" => isset($table_data['customer_name']) ? $table_data['customer_name'] : 'Guest',
                         "round" => $idx + 1,
                         "timestamp" => $order['timestamp'],
                         "completed_at" => isset($order['completed_at']) ? $order['completed_at'] : null,
                         "status" => isset($order['status']) ? $order['status'] : 'Received',
-                        "items" => isset($order['items']) ? $order['items'] : []
-                    ];
+                        "items" => isset($order['items']) ? $order['items'] : [],
+                        "bill_asked" => $table_data['status'] === 'Checkout Requested',
+                        "escalated" => !empty($order['escalated']),
+                    ]);
                 }
             }
-            usort($flat, function($a, $b) {
-                return strcmp($a['timestamp'], $b['timestamp']); // oldest first
-            });
-            echo json_encode($flat);
+            foreach (read_json("counter_orders.json", []) as $co) {
+                if ((isset($co['outlet_id']) ? $co['outlet_id'] : 'main') !== current_outlet()) continue;
+                if ($co['status'] === 'Served' && strtotime($co['completed_at'] ?? $co['timestamp']) < $now - 3600) continue;
+                $flat[] = kitchen_ticket([
+                    "order_id" => $co['order_id'], "table_no" => $co['no'], "label" => $co['no'] . " · " . $co['ref'],
+                    "channel" => $co['channel'], "customer_name" => $co['customer_name'], "round" => 1,
+                    "timestamp" => $co['timestamp'], "completed_at" => $co['completed_at'] ?? null, "status" => $co['status'],
+                    "items" => $co['items'], "bill_asked" => false, "escalated" => !empty($co['escalated']),
+                ]);
+            }
+            // Escalate stale tickets once (audit log = manager alert)
+            foreach ($flat as &$t) {
+                if ($t['status'] !== 'Served' && $t['status'] !== 'Ready' && !$t['escalated'] && $now - strtotime($t['timestamp']) > 60 * floatval($st['kds_stale_min'])) {
+                    $t['escalated'] = true;
+                    $escalate[] = $t;
+                }
+            }
+            unset($t);
+            if (count($escalate)) {
+                $ids = array_column($escalate, 'order_id');
+                foreach ($active as &$td) foreach ($td['orders'] as &$o) if (in_array($o['order_id'], $ids, true)) $o['escalated'] = true;
+                unset($td, $o);
+                write_json("active_orders.json", $active);
+                $cos = read_json("counter_orders.json", []);
+                foreach ($cos as &$co) if (in_array($co['order_id'], $ids, true)) $co['escalated'] = true;
+                unset($co);
+                write_json("counter_orders.json", $cos);
+                foreach ($escalate as $t) write_audit_log("Kitchen", "Stale ticket escalated: {$t['label']} (order {$t['order_id']}) waiting over {$st['kds_stale_min']} min");
+            }
+            usort($flat, function($a, $b) { return strcmp($a['timestamp'], $b['timestamp']); });
+            echo json_encode(["tickets" => $flat, "stations" => $st['stations'], "warn_pct" => $st['kds_warn_pct'],
+                              "stale_min" => $st['kds_stale_min'], "block_bill" => !empty($st['block_bill_until_served'])]);
         }
         break;
 
     // 13. POST /api/kitchen/update-status
     case 'kitchen/update-status':
         if ($method === 'POST') {
-            require_role($staff_user, ['Admin', 'Kitchen']);
+            require_role($staff_user, ['Admin', 'Owner', 'Kitchen']);
             $input = json_decode(file_get_contents("php://input"), true);
-            $order_id = isset($input['order_id']) ? $input['order_id'] : '';
-            $table_no = isset($input['table_no']) ? $input['table_no'] : '';
-            $new_status = isset($input['status']) ? $input['status'] : '';
+            $order_id = isset($input['order_id']) ? (string)$input['order_id'] : '';
+            $table_no = clean_table_no(isset($input['table_no']) ? $input['table_no'] : '');
+            $new_status = isset($input['status']) ? (string)$input['status'] : '';
+            if (!in_array($new_status, ['Received', 'Preparing', 'Ready', 'Served'], true)) {
+                http_response_code(400); echo json_encode(["status" => "error", "message" => "Unknown status."]); exit;
+            }
+            if (strpos($order_id, 'co_') === 0) {
+                // Takeaway / delivery / online order
+                $cos = read_json("counter_orders.json", []);
+                $found = false;
+                foreach ($cos as &$co) {
+                    if ($co['order_id'] !== $order_id) continue;
+                    $co['status'] = $new_status;
+                    if ($new_status === 'Ready') $co['ready_at'] = gmdate("Y-m-d\TH:i:s\Z");
+                    if ($new_status === 'Served') $co['completed_at'] = gmdate("Y-m-d\TH:i:s\Z");
+                    $found = $co;
+                    break;
+                }
+                unset($co);
+                if (!$found) { http_response_code(404); echo json_encode(["status" => "error", "message" => "Order not found."]); exit; }
+                write_json("counter_orders.json", $cos);
+                write_audit_log($staff_user, "Kitchen updated {$found['no']} ({$found['channel']}) → $new_status");
+                echo json_encode(["status" => "ok", "message" => "Status updated to $new_status"]);
+                break;
+            }
             
             $active = read_json("active_orders.json", []);
-            $key = "table_" . $table_no;
+            $key = table_key($table_no);
             $updated = false;
             
             if (isset($active[$key])) {
                 foreach ($active[$key]['orders'] as &$o) {
                     if ($o['order_id'] === $order_id) {
                         $o['status'] = $new_status;
+                        if ($new_status === 'Ready') $o['ready_at'] = gmdate("Y-m-d\TH:i:s\Z");
                         if ($new_status === 'Served') {
-                            $o['completed_at'] = date("Y-m-d\TH:i:s\Z");
+                            $o['completed_at'] = gmdate("Y-m-d\TH:i:s\Z");
                         }
                         $updated = true;
                         break;
@@ -1381,51 +1682,30 @@ switch ($route) {
 
     // 15. GET /api/dashboard/summary
     case 'dashboard/summary':
+        // Every revenue card uses the SAME period (?days=1 today, 7, 30); live cards say "now"
         if ($method === 'GET') {
             require_role($staff_user, ['Admin', 'Owner']);
-            $invoices = read_json("invoices.json", []);
-            $today_str = date("Y-m-d");
-            
-            $today_inv = [];
-            foreach ($invoices as $i) {
-                if (strpos($i['timestamp'], $today_str) === 0) {
-                    $today_inv[] = $i;
-                }
-            }
-            
-            $today_revenue = array_sum(array_column($today_inv, 'total'));
-            
-            // Monthly revenue (last 30 days)
-            $cutoff = time() - (30 * 86400);
-            $monthly_revenue = 0;
-            foreach ($invoices as $i) {
-                if (strtotime($i['timestamp']) >= $cutoff) {
-                    $monthly_revenue += $i['total'];
-                }
-            }
-            
-            $avg_bill = count($invoices) > 0 ? array_sum(array_column($invoices, 'total')) / count($invoices) : 0;
-            $active_tables = count(read_json("active_orders.json", []));
-            
-            // Pending orders count
+            $days = period_days(1);
+            $inv = period_invoices($days);
+            $revenue = array_sum(array_column($inv, 'total'));
             $active = read_json("active_orders.json", []);
-            $pending = 0;
+            $tables = 0; $pending = 0;
             foreach ($active as $td) {
-                if (is_array($td)) {
-                    foreach ($td['orders'] as $o) {
-                        if (in_array(isset($o['status']) ? $o['status'] : 'Received', ['Received', 'Preparing'])) {
-                            $pending++;
-                        }
-                    }
-                }
+                if (!is_array($td) || session_outlet($td) !== current_outlet()) continue;
+                $tables++;
+                foreach ($td['orders'] as $o) if (in_array(isset($o['status']) ? $o['status'] : 'Received', ['Received', 'Preparing'])) $pending++;
             }
-            
+            foreach (read_json("counter_orders.json", []) as $co) {
+                if ((isset($co['outlet_id']) ? $co['outlet_id'] : 'main') === current_outlet() && in_array($co['status'], ['Received', 'Preparing'])) $pending++;
+            }
             echo json_encode([
-                "today_revenue" => round($today_revenue, 2),
-                "today_invoices" => count($today_inv),
-                "active_tables" => $active_tables,
-                "avg_bill" => round($avg_bill, 2),
-                "monthly_revenue" => round($monthly_revenue, 2),
+                "days" => $days,
+                "period_label" => $days === 1 ? "Today" : "Last $days days",
+                "revenue" => money($revenue),
+                "invoices" => count($inv),
+                "avg_bill" => count($inv) ? money($revenue / count($inv)) : 0,
+                "guests" => count(array_unique(array_filter(array_column($inv, 'customer_phone')))),
+                "active_tables" => $tables,
                 "pending_orders" => $pending,
                 "bom_enabled" => get_settings()['bom_enabled'],
                 "low_stock_count" => count(array_filter(read_json("inventory.json", ["materials" => []])['materials'], function($m) {
@@ -1439,18 +1719,16 @@ switch ($route) {
     case 'dashboard/revenue':
         if ($method === 'GET') {
             require_role($staff_user, ['Admin', 'Owner']);
-            $invoices = read_json("invoices.json", []);
+            $days = period_days(30);
+            $by = [];
+            foreach (period_invoices($days) as $inv) {
+                $d = date("Y-m-d", strtotime($inv['timestamp']));
+                $by[$d] = (isset($by[$d]) ? $by[$d] : 0) + $inv['total'];
+            }
             $result = [];
-            for ($i = 29; $i >= 0; $i--) {
-                $day = date("Y-m-d", time() - ($i * 86400));
-                $day_label = date("d M", time() - ($i * 86400));
-                $rev = 0;
-                foreach ($invoices as $inv) {
-                    if (strpos($inv['timestamp'], $day) === 0) {
-                        $rev += $inv['total'];
-                    }
-                }
-                $result[] = ["date" => $day_label, "revenue" => round($rev, 2)];
+            for ($i = $days - 1; $i >= 0; $i--) {
+                $t = strtotime('today') - $i * 86400;
+                $result[] = ["date" => date("d M", $t), "revenue" => money(isset($by[date("Y-m-d", $t)]) ? $by[date("Y-m-d", $t)] : 0)];
             }
             echo json_encode($result);
         }
@@ -1460,7 +1738,7 @@ switch ($route) {
     case 'dashboard/items':
         if ($method === 'GET') {
             require_role($staff_user, ['Admin', 'Owner']);
-            $invoices = read_json("invoices.json", []);
+            $invoices = period_invoices();
             $item_map = [];
             foreach ($invoices as $inv) {
                 foreach ($inv['items'] as $item) {
@@ -1485,7 +1763,7 @@ switch ($route) {
     case 'dashboard/categories':
         if ($method === 'GET') {
             require_role($staff_user, ['Admin', 'Owner']);
-            $invoices = read_json("invoices.json", []);
+            $invoices = period_invoices();
             
             // Map item name to category
             $menu_items = [];
@@ -1531,13 +1809,10 @@ switch ($route) {
     case 'dashboard/hourly':
         if ($method === 'GET') {
             require_role($staff_user, ['Admin', 'Owner']);
-            $invoices = read_json("invoices.json", []);
+            $invoices = period_invoices();
             $hour_map = array_fill(0, 24, 0);
             foreach ($invoices as $inv) {
-                $ts = strtotime($inv['timestamp']);
-                // Convert UTC to IST (+5:30)
-                $ist_ts = $ts + (5.5 * 3600);
-                $hour = intval(date("H", $ist_ts));
+                $hour = intval(date("H", strtotime($inv['timestamp'])));   // IST
                 $hour_map[$hour]++;
             }
             $result = [];
@@ -1552,7 +1827,7 @@ switch ($route) {
     case 'settings':
         require_role($staff_user, ['Admin']);
         if ($method === 'GET') {
-            echo json_encode(get_settings());
+            echo json_encode(get_company_settings());
         } elseif ($method === 'POST') {
             $input = json_decode(file_get_contents("php://input"), true);
             if (!is_array($input)) {
@@ -1560,7 +1835,7 @@ switch ($route) {
                 echo json_encode(["status" => "error", "message" => "Invalid settings."]);
                 exit;
             }
-            $old = get_settings();
+            $old = get_company_settings();
             $new = $old;
             if (isset($input['business_name']))    $new['business_name']    = clean_text($input['business_name'], 80) ?: $old['business_name'];
             if (isset($input['business_address'])) $new['business_address'] = clean_text($input['business_address'], 160);
@@ -1660,6 +1935,8 @@ switch ($route) {
                     "unit" => $unit,
                     "reorder_level" => max(0, round(floatval(isset($m['reorder_level']) ? $m['reorder_level'] : 0), 3)),
                     "cost_per_unit" => max(0, money(isset($m['cost_per_unit']) ? $m['cost_per_unit'] : 0)),
+                    "category" => in_array(isset($m['category']) ? $m['category'] : '', material_categories(), true) ? $m['category'] : 'Grocery',
+                    "shelf_life_days" => max(0, min(3650, intval(isset($m['shelf_life_days']) ? $m['shelf_life_days'] : 0))),
                 ];
                 $id = isset($m['id']) ? (string)$m['id'] : '';
                 $found = false;
@@ -1695,7 +1972,7 @@ switch ($route) {
                     }
                 }
                 foreach (read_json("purchase_orders.json", []) as $po) {
-                    if (in_array($po['status'], ['Draft', 'Ordered', 'Partially Received'], true)) {
+                    if (in_array($po['status'], ['Draft', 'Awaiting approval', 'Ordered', 'Partially Received'], true)) {
                         foreach ($po['lines'] as $l) {
                             if ($l['material_id'] === $id) {
                                 http_response_code(400);
@@ -1764,10 +2041,10 @@ switch ($route) {
     case 'bom':
         require_bom_enabled();
         if ($method === 'GET') {
-            require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
+            require_role($staff_user, ['Admin', 'Owner', 'Receptionist', 'Kitchen']);
             echo json_encode((object)read_json("bom.json", []));
         } elseif ($method === 'POST') {
-            require_role($staff_user, ['Admin', 'Owner']);
+            require_perm($staff_user, 'editRecipe');
             $input = json_decode(file_get_contents("php://input"), true);
             $item_id = isset($input['item_id']) ? (string)$input['item_id'] : '';
             $variant = isset($input['variant']) ? (string)$input['variant'] : '';
@@ -1790,8 +2067,9 @@ switch ($route) {
             foreach ($raw as $ing) {
                 $mid = isset($ing['material_id']) ? (string)$ing['material_id'] : '';
                 $qty = round(floatval(isset($ing['qty']) ? $ing['qty'] : 0), 4);
+                $loss = max(0, min(90, round(floatval(isset($ing['loss_pct']) ? $ing['loss_pct'] : 0), 2)));
                 if (!in_array($mid, $material_ids, true) || $qty <= 0) continue;
-                $ings[] = ["material_id" => $mid, "qty" => $qty];
+                $ings[] = ["material_id" => $mid, "qty" => $qty, "loss_pct" => $loss];
             }
             $bom = read_json("bom.json", []);
             if (count($ings) === 0) {
@@ -1849,7 +2127,7 @@ switch ($route) {
             } elseif ($action === 'delete') {
                 $id = isset($input['id']) ? (string)$input['id'] : '';
                 foreach (read_json("purchase_orders.json", []) as $po) {
-                    if ($po['supplier_id'] === $id && in_array($po['status'], ['Draft', 'Ordered', 'Partially Received'], true)) {
+                    if ($po['supplier_id'] === $id && in_array($po['status'], ['Draft', 'Awaiting approval', 'Ordered', 'Partially Received'], true)) {
                         http_response_code(400);
                         echo json_encode(["status" => "error", "message" => "This supplier has open purchase orders (" . $po['po_number'] . "). Close or cancel them first."]);
                         exit;
@@ -1884,8 +2162,10 @@ switch ($route) {
 
         $input = json_decode(file_get_contents("php://input"), true);
         $action = isset($input['action']) ? $input['action'] : '';
-        // Receptionists can record deliveries; everything else is Admin / Owner
-        require_role($staff_user, $action === 'receive' ? ['Admin', 'Owner', 'Receptionist'] : ['Admin', 'Owner']);
+        // Receptionists can raise POs and record deliveries; approving needs the
+        // "Approve purchase orders" permission; cancelling/deleting is Admin / Owner
+        require_role($staff_user, in_array($action, ['receive', 'save', 'place'], true) ? ['Admin', 'Owner', 'Receptionist'] : ['Admin', 'Owner']);
+        if (in_array($action, ['approve', 'reject'], true)) require_perm($staff_user, 'approvePO');
 
         $pos = read_json("purchase_orders.json", []);
         $now = gmdate("Y-m-d\TH:i:s\Z");
@@ -1966,11 +2246,39 @@ switch ($route) {
             $idx = $find(isset($input['id']) ? (string)$input['id'] : '');
             if ($idx < 0) $fail("Purchase order not found.", 404);
             if ($pos[$idx]['status'] !== 'Draft') $fail("This purchase order has already been placed.");
+            // Approval limit: above it, someone with "Approve purchase orders" must approve first
+            $limit = floatval(get_settings()['po_limit']);
+            if ($pos[$idx]['total'] > $limit && !has_perm($staff_user, 'approvePO')) {
+                $pos[$idx]['status'] = 'Awaiting approval';
+                $pos[$idx]['history'][] = ["timestamp" => $now, "user" => $staff_user, "action" => "Sent for approval (above ₹" . $limit . " limit)"];
+                write_json("purchase_orders.json", $pos);
+                write_audit_log($staff_user, "Purchase order " . $pos[$idx]['po_number'] . " (₹" . $pos[$idx]['total'] . ") sent for approval");
+                echo json_encode(["status" => "ok", "po" => $pos[$idx], "needs_approval" => true]);
+                exit;
+            }
             $pos[$idx]['status'] = 'Ordered';
             $pos[$idx]['ordered_at'] = $now;
             $pos[$idx]['history'][] = ["timestamp" => $now, "user" => $staff_user, "action" => "Placed order with supplier"];
             write_json("purchase_orders.json", $pos);
             write_audit_log($staff_user, "Placed purchase order " . $pos[$idx]['po_number'] . " with " . $pos[$idx]['supplier_name']);
+            echo json_encode(["status" => "ok", "po" => $pos[$idx]]);
+
+        } elseif ($action === 'approve' || $action === 'reject') {
+            $idx = $find(isset($input['id']) ? (string)$input['id'] : '');
+            if ($idx < 0) $fail("Purchase order not found.", 404);
+            if ($pos[$idx]['status'] !== 'Awaiting approval') $fail("This purchase order is not waiting for approval.");
+            $reason = clean_text(isset($input['reason']) ? $input['reason'] : '', 120);
+            if ($action === 'approve') {
+                $pos[$idx]['status'] = 'Ordered';
+                $pos[$idx]['ordered_at'] = $now;
+                $pos[$idx]['approved_by'] = $staff_user;
+                $pos[$idx]['history'][] = ["timestamp" => $now, "user" => $staff_user, "action" => "Approved and placed with supplier"];
+            } else {
+                $pos[$idx]['status'] = 'Rejected';
+                $pos[$idx]['history'][] = ["timestamp" => $now, "user" => $staff_user, "action" => "Rejected" . ($reason !== '' ? " — $reason" : "")];
+            }
+            write_json("purchase_orders.json", $pos);
+            write_audit_log($staff_user, ($action === 'approve' ? "Approved" : "Rejected") . " purchase order " . $pos[$idx]['po_number'] . " (₹" . $pos[$idx]['total'] . ")" . ($reason !== '' ? " — $reason" : ""));
             echo json_encode(["status" => "ok", "po" => $pos[$idx]]);
 
         } elseif ($action === 'receive') {
@@ -1981,34 +2289,61 @@ switch ($route) {
             if (!in_array($po['status'], ['Ordered', 'Partially Received'], true)) $fail("Only placed orders can be received.");
             $bill_no = clean_text(isset($input['bill_no']) ? $input['bill_no'] : '', 40);
             $note = clean_text(isset($input['note']) ? $input['note'] : '', 120);
+            // Quality check at receipt: each line can fail on temperature or quality
+            // (not stocked), and invoice rates above the PO rate raise an alert.
+            $st = get_settings();
             $incoming = [];
             foreach ((isset($input['lines']) && is_array($input['lines']) ? $input['lines'] : []) as $ln) {
                 $mid = isset($ln['material_id']) ? (string)$ln['material_id'] : '';
                 $q = round(floatval(isset($ln['qty']) ? $ln['qty'] : 0), 3);
-                if ($mid !== '' && $q > 0) $incoming[$mid] = (isset($incoming[$mid]) ? $incoming[$mid] : 0) + $q;
+                if ($mid === '' || $q <= 0) continue;
+                $incoming[$mid] = [
+                    "qty" => $q,
+                    "invoice_rate" => isset($ln['invoice_rate']) && $ln['invoice_rate'] !== '' ? money($ln['invoice_rate']) : null,
+                    "temp_ok" => !isset($ln['temp_ok']) || (bool)$ln['temp_ok'],
+                    "quality_ok" => !isset($ln['quality_ok']) || (bool)$ln['quality_ok'],
+                ];
             }
             if (count($incoming) === 0) $fail("Enter the quantity received for at least one material.");
 
-            $received_lines = [];
+            $received_lines = []; $rejected_lines = []; $rate_alerts = [];
+            $tol = floatval($st['qty_tolerance_pct']);
             foreach ($po['lines'] as &$line) {
                 if (!isset($incoming[$line['material_id']])) continue;
-                $q = $incoming[$line['material_id']];
+                $in = $incoming[$line['material_id']];
+                $q = $in['qty'];
                 $pending = round($line['qty'] - $line['received_qty'], 3);
-                if ($q > $pending + 0.0005) $fail("\"" . $line['name'] . "\": only " . $pending . " " . $line['unit'] . " is still pending on this order.");
+                $max = round($pending + $line['qty'] * $tol / 100, 3);
+                if ($q > $max + 0.0005) $fail("\"" . $line['name'] . "\": only " . $pending . " " . $line['unit'] . " is pending (plus $tol% tolerance).");
+                $rate = $in['invoice_rate'] !== null && $in['invoice_rate'] > 0 ? $in['invoice_rate'] : $line['rate'];
+                if (!$in['temp_ok'] || !$in['quality_ok']) {
+                    $rejected_lines[] = ["material_id" => $line['material_id'], "name" => $line['name'], "unit" => $line['unit'], "qty" => $q,
+                                         "reason" => !$in['temp_ok'] ? "Temperature check failed" : "Quality check failed"];
+                    continue;
+                }
+                if ($line['rate'] > 0 && ($rate - $line['rate']) / $line['rate'] * 100 > floatval($st['rate_variance_pct']) + 0.0001) {
+                    $rate_alerts[] = ["name" => $line['name'], "po_rate" => $line['rate'], "invoice_rate" => $rate,
+                                      "pct" => round(($rate - $line['rate']) / $line['rate'] * 100, 1)];
+                }
                 $line['received_qty'] = round($line['received_qty'] + $q, 3);
-                $received_lines[] = ["material_id" => $line['material_id'], "name" => $line['name'], "unit" => $line['unit'], "qty" => $q, "rate" => $line['rate']];
+                $received_lines[] = ["material_id" => $line['material_id'], "name" => $line['name'], "unit" => $line['unit'], "qty" => $q, "rate" => $rate];
             }
             unset($line);
-            if (count($received_lines) === 0) $fail("Those materials are not on this purchase order.");
+            if (count($received_lines) === 0 && count($rejected_lines) === 0) $fail("Those materials are not on this purchase order.");
 
-            // Update inventory
+            // Update inventory (into the main store): weighted-average cost, last rate, expiry
             $inv = read_json("inventory.json", ["materials" => []]);
             $entries = [];
             foreach ($received_lines as $rl) {
                 foreach ($inv['materials'] as &$m) {
                     if ($m['id'] !== $rl['material_id']) continue;
+                    $old = max(0, floatval($m['stock']));
+                    if ($rl['rate'] > 0) {
+                        $m['cost_per_unit'] = money(($old * floatval($m['cost_per_unit']) + $rl['qty'] * $rl['rate']) / ($old + $rl['qty']));
+                        $m['last_cost'] = $rl['rate'];
+                    }
                     $m['stock'] = round(floatval($m['stock']) + $rl['qty'], 3);
-                    if ($rl['rate'] > 0) $m['cost_per_unit'] = $rl['rate'];   // latest purchase price
+                    if (!empty($m['shelf_life_days'])) $m['expires_on'] = date("Y-m-d", strtotime("+" . intval($m['shelf_life_days']) . " days"));
                     $entries[] = ["timestamp" => $now, "material_id" => $m['id'], "name" => $m['name'], "delta" => $rl['qty'],
                                   "balance" => $m['stock'], "reason" => "Received on " . $po['po_number'] . ($bill_no !== '' ? " (bill $bill_no)" : ""),
                                   "user" => $staff_user];
@@ -2022,13 +2357,18 @@ switch ($route) {
             foreach ($po['lines'] as $l) if ($l['received_qty'] + 0.0005 < $l['qty']) $all_done = false;
             $po['status'] = $all_done ? 'Received' : 'Partially Received';
             $po['receipts'][] = ["timestamp" => $now, "user" => $staff_user, "bill_no" => $bill_no, "note" => $note, "lines" => $received_lines,
+                                 "rejected" => $rejected_lines, "rate_alerts" => $rate_alerts,
+                                 "grn_no" => "GRN-" . gmdate("ymd") . "-" . str_pad(count($po['receipts']) + 1, 2, "0", STR_PAD_LEFT),
+                                 "on_time" => empty($po['expected_date']) || date("Y-m-d") <= $po['expected_date'],
                                  "value" => money(array_sum(array_map(function($l) { return $l['qty'] * $l['rate']; }, $received_lines)))];
             $po['history'][] = ["timestamp" => $now, "user" => $staff_user, "action" => ($all_done ? "Received in full" : "Received part delivery") . ($bill_no !== '' ? " · bill $bill_no" : "")];
             if ($all_done) $po['received_at'] = $now;
             $pos[$idx] = $po;
             write_json("purchase_orders.json", $pos);
             $summary = implode(", ", array_map(function($l) { return $l['name'] . " " . $l['qty'] . " " . $l['unit']; }, $received_lines));
-            write_audit_log($staff_user, "Received goods on " . $po['po_number'] . ": $summary");
+            write_audit_log($staff_user, "Received goods on " . $po['po_number'] . ": " . ($summary !== '' ? $summary : "nothing accepted")
+                . (count($rejected_lines) ? "; QC rejected " . implode(", ", array_column($rejected_lines, 'name')) : "")
+                . (count($rate_alerts) ? "; RATE ALERT " . implode(", ", array_map(function($r) { return $r['name'] . " +" . $r['pct'] . "%"; }, $rate_alerts)) : ""));
             echo json_encode(["status" => "ok", "po" => $po]);
 
         } elseif ($action === 'cancel') {
@@ -2083,12 +2423,14 @@ switch ($route) {
             require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
             $c = array_values(load_customers());
             usort($c, function($a, $b) { return strcmp($b['last_seen'], $a['last_seen']); });
+            foreach ($c as &$x) { $x['id'] = customer_id($x['phone']); $x['phone'] = show_phone($x['phone'], $staff_user); }
+            unset($x);
             echo json_encode($c);
         } elseif ($method === 'POST') {
             $input = json_decode(file_get_contents("php://input"), true);
             $action = isset($input['action']) ? $input['action'] : '';
-            $phone = clean_phone(isset($input['phone']) ? $input['phone'] : '');
             $c = load_customers();
+            $phone = customer_phone_from_id(isset($input['id']) ? (string)$input['id'] : '', $c);
             if ($action === 'save') {
                 require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
                 if (!isset($c[$phone])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "Customer not found."]); exit; }
@@ -2115,8 +2457,8 @@ switch ($route) {
     // 30. GET /api/customers/detail?phone= — profile + past orders
     case 'customers/detail':
         require_role($staff_user, ['Admin', 'Owner', 'Receptionist']);
-        $phone = clean_phone(isset($_GET['phone']) ? $_GET['phone'] : '');
         $c = load_customers();
+        $phone = customer_phone_from_id(isset($_GET['id']) ? (string)$_GET['id'] : '', $c);
         if (!isset($c[$phone])) { http_response_code(404); echo json_encode(["status" => "error", "message" => "Customer not found."]); exit; }
         $mine = array_values(array_filter(read_json("invoices.json", []), function($inv) use ($phone) {
             return clean_phone(isset($inv['customer_phone']) ? $inv['customer_phone'] : '') === $phone;
@@ -2131,17 +2473,20 @@ switch ($route) {
         usort($fav, function($a, $b) { return $b['qty'] - $a['qty']; });
         $open = null;
         foreach (load_sessions() as $sess) if ($sess['customer_phone'] === $phone) $open = ["table_no" => $sess['table_no'], "since" => $sess['started_at']];
-        echo json_encode(["customer" => $c[$phone], "invoices" => $mine, "favourites" => array_slice($fav, 0, 5), "open_table" => $open]);
+        $cust = $c[$phone];
+        $cust['id'] = customer_id($phone);
+        $cust['phone'] = show_phone($phone, $staff_user);
+        foreach ($mine as &$m) $m['customer_phone'] = show_phone($m['customer_phone'], $staff_user);
+        unset($m);
+        echo json_encode(["customer" => $cust, "invoices" => $mine, "favourites" => array_slice($fav, 0, 5), "open_table" => $open]);
         break;
 
     // 26. GET /api/dashboard/payments — revenue by payment method (last 30 days)
     case 'dashboard/payments':
         require_role($staff_user, ['Admin', 'Owner']);
-        $invoices = read_json("invoices.json", []);
-        $cutoff = time() - (30 * 86400);
+        $invoices = period_invoices();
         $by = [];
         foreach ($invoices as $inv) {
-            if (strtotime($inv['timestamp']) < $cutoff) continue;
             $pays = isset($inv['payments']) && is_array($inv['payments']) && count($inv['payments'])
                 ? $inv['payments']
                 : [["method" => "Not recorded", "amount" => $inv['total']]];
@@ -2170,6 +2515,7 @@ switch ($route) {
         break;
 
     default:
+        if (erp_handle($route, $method, $staff_user)) break;
         http_response_code(404);
         echo json_encode(["status" => "error", "message" => "Endpoint '$route' not found."]);
         break;

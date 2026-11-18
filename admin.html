@@ -9,7 +9,7 @@
   <link rel="icon" type="image/svg+xml" href="assets/img/mosaic-engine-icon.svg">
   <link rel="apple-touch-icon" href="assets/img/mosaic-engine-icon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="assets/css/admin.css?v=20261117f">
+  <link rel="stylesheet" href="assets/css/admin.css?v=20261118b">
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
@@ -70,11 +70,14 @@
         <div class="nav-group" data-group="overview">
           <div class="nav-label">Overview</div>
           <button class="nav-link" data-tab="dashboard"><i class="fas fa-chart-line"></i> Dashboard</button>
+          <button class="nav-link" data-tab="pnl"><i class="fas fa-scale-balanced"></i> P&amp;L &amp; food cost</button>
         </div>
         <div class="nav-group" data-group="operations">
           <div class="nav-label">Operations</div>
           <button class="nav-link" data-tab="orders"><i class="fas fa-chair"></i> Table Orders <span class="nav-badge hidden" id="nav-bill-badge">0</span></button>
+          <button class="nav-link" data-tab="counter"><i class="fas fa-bag-shopping"></i> Takeaway &amp; delivery <span class="nav-badge hidden" id="nav-incoming-badge">0</span></button>
           <a class="nav-link" href="kitchen.html" data-link="kitchen"><i class="fas fa-fire-burner"></i> Kitchen Display</a>
+          <button class="nav-link" data-tab="stations"><i class="fas fa-fire"></i> Kitchen stations</button>
           <button class="nav-link" data-tab="invoices"><i class="fas fa-file-invoice"></i> Sales Invoices</button>
           <button class="nav-link" data-tab="customers"><i class="fas fa-address-book"></i> Customers</button>
         </div>
@@ -83,12 +86,20 @@
           <button class="nav-link" data-tab="items"><i class="fas fa-utensils"></i> Menu Items</button>
           <button class="nav-link" data-tab="categories"><i class="fas fa-tags"></i> Categories</button>
           <button class="nav-link" data-tab="inventory"><i class="fas fa-boxes-stacked"></i> BOM &amp; Inventory</button>
+          <button class="nav-link" data-tab="costing"><i class="fas fa-calculator"></i> Recipe costing</button>
+          <button class="nav-link" data-tab="counts"><i class="fas fa-scale-unbalanced"></i> Stock counts &amp; transfers <span class="nav-badge hidden" id="nav-expiry-badge">0</span></button>
+          <button class="nav-link" data-tab="wastage"><i class="fas fa-trash-can"></i> Wastage <span class="nav-badge hidden" id="nav-waste-badge">0</span></button>
+          <button class="nav-link" data-tab="production"><i class="fas fa-blender"></i> Production &amp; labels</button>
           <button class="nav-link" data-tab="purchasing"><i class="fas fa-truck-ramp-box"></i> Purchasing <span class="nav-badge hidden" id="nav-po-badge">0</span></button>
         </div>
         <div class="nav-group" data-group="admin">
           <div class="nav-label">Administration</div>
           <button class="nav-link" data-tab="users"><i class="fas fa-users-gear"></i> Users</button>
+          <button class="nav-link" data-tab="perms"><i class="fas fa-user-shield"></i> Permissions &amp; limits</button>
           <button class="nav-link" data-tab="logs"><i class="fas fa-clock-rotate-left"></i> Audit Log</button>
+          <button class="nav-link" data-tab="safety"><i class="fas fa-temperature-half"></i> Food safety <span class="nav-badge hidden" id="nav-safety-badge">0</span></button>
+          <button class="nav-link" data-tab="staff"><i class="fas fa-user-clock"></i> Staff &amp; shifts</button>
+          <button class="nav-link" data-tab="outlets"><i class="fas fa-building"></i> Outlets</button>
           <button class="nav-link" data-tab="settings"><i class="fas fa-gear"></i> Settings</button>
         </div>
       </nav>
@@ -108,6 +119,10 @@
         <button class="btn btn-icon btn-ghost menu-toggle" onclick="toggleNav(true)" aria-label="Open menu"><i class="fas fa-bars"></i></button>
         <div class="topbar-title" id="topbar-title">Dashboard</div>
         <div class="topbar-actions">
+          <label class="outlet-switch hidden" id="outlet-switch" title="Outlet you are working in">
+            <i class="fas fa-building"></i>
+            <select class="select" id="outlet-select" aria-label="Outlet" onchange="switchOutlet(this.value)"></select>
+          </label>
           <a href="index.html" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" title="Open the customer menu"><i class="fas fa-arrow-up-right-from-square"></i><span class="btn-label">Live Menu</span></a>
           <button class="btn btn-secondary btn-sm" onclick="logoutAdmin()" title="Sign out"><i class="fas fa-right-from-bracket"></i><span class="btn-label">Sign out</span></button>
         </div>
@@ -123,6 +138,11 @@
               <p>Revenue, best sellers and busy hours across all tables.</p>
             </div>
             <div class="page-actions">
+              <div class="seg" id="db-period" role="radiogroup" aria-label="Period">
+                <button type="button" data-d="1" class="active">Today</button>
+                <button type="button" data-d="7">7 days</button>
+                <button type="button" data-d="30">30 days</button>
+              </div>
               <button class="btn btn-secondary" onclick="loadDashboard()"><i class="fas fa-rotate"></i> Refresh</button>
               <button class="btn btn-primary" onclick="exportDashboardPDF()"><i class="fas fa-file-pdf"></i> Export PDF</button>
             </div>
@@ -132,7 +152,7 @@
 
           <div class="charts-grid">
             <div class="card wide">
-              <div class="card-header"><h3><i class="fas fa-chart-column"></i> Daily revenue <span class="sub">· last 30 days</span></h3></div>
+              <div class="card-header"><h3><i class="fas fa-chart-column"></i> Daily revenue <span class="sub" id="db-rev-sub">· selected period (at least 7 days)</span></h3></div>
               <div class="card-body"><div class="chart-wrap"><canvas id="chart-revenue"></canvas></div></div>
             </div>
             <div class="card">
@@ -140,11 +160,11 @@
               <div class="card-body"><div class="chart-wrap tall"><canvas id="chart-category"></canvas></div></div>
             </div>
             <div class="card">
-              <div class="card-header"><h3><i class="fas fa-wallet"></i> Payment methods <span class="sub">· last 30 days</span></h3></div>
+              <div class="card-header"><h3><i class="fas fa-wallet"></i> Payment methods <span class="sub">· selected period</span></h3></div>
               <div class="card-body"><div class="chart-wrap tall"><canvas id="chart-payments"></canvas></div></div>
             </div>
             <div class="card">
-              <div class="card-header"><h3><i class="fas fa-clock"></i> Peak hours <span class="sub">· bills per hour</span></h3></div>
+              <div class="card-header"><h3><i class="fas fa-clock"></i> Peak hours <span class="sub">· bills per hour, selected period</span></h3></div>
               <div class="card-body"><div class="chart-wrap tall"><canvas id="chart-hourly"></canvas></div></div>
             </div>
             <div class="card">
@@ -450,6 +470,8 @@
           <div class="tabs" role="tablist">
             <button class="tab active" data-ptab="orders" onclick="switchPurchasingTab('orders')"><i class="fas fa-file-invoice"></i> Purchase orders</button>
             <button class="tab" data-ptab="suppliers" onclick="switchPurchasingTab('suppliers')"><i class="fas fa-truck-field"></i> Suppliers</button>
+            <button class="tab" data-ptab="scorecard" onclick="switchPurchasingTab('scorecard')"><i class="fas fa-star-half-stroke"></i> Vendor scorecard</button>
+            <button class="tab" data-ptab="rules" onclick="switchPurchasingTab('rules')"><i class="fas fa-sliders"></i> Approval &amp; QC rules</button>
           </div>
 
           <div class="subpage active" id="pur-orders">
@@ -457,6 +479,7 @@
               <div class="card-header">
                 <div class="seg" id="po-filter">
                   <button type="button" class="active" data-f="open">Open</button>
+                  <button type="button" data-f="Awaiting approval">Awaiting approval</button>
                   <button type="button" data-f="Draft">Drafts</button>
                   <button type="button" data-f="closed">Completed</button>
                   <button type="button" data-f="all">All</button>
@@ -475,6 +498,9 @@
             </div>
           </div>
 
+          <div class="subpage" id="pur-scorecard"><div id="vendor-scorecard"></div></div>
+          <div class="subpage" id="pur-rules"><div id="po-rules"></div></div>
+
           <div class="subpage" id="pur-suppliers">
             <div class="card">
               <div class="card-header">
@@ -490,6 +516,18 @@
             </div>
           </div>
         </section>
+
+        <section class="page erp-page" id="sec-pnl"></section>
+        <section class="page erp-page" id="sec-counter"></section>
+        <section class="page erp-page" id="sec-stations"></section>
+        <section class="page erp-page" id="sec-costing"></section>
+        <section class="page erp-page" id="sec-counts"></section>
+        <section class="page erp-page" id="sec-wastage"></section>
+        <section class="page erp-page" id="sec-production"></section>
+        <section class="page erp-page" id="sec-perms"></section>
+        <section class="page erp-page" id="sec-safety"></section>
+        <section class="page erp-page" id="sec-staff"></section>
+        <section class="page erp-page" id="sec-outlets"></section>
 
         <!-- ─────────── USERS ─────────── -->
         <section class="page" id="sec-users">
@@ -736,6 +774,19 @@
               <label for="item-order-input">Display order</label>
               <input type="number" class="input" id="item-order-input" value="1" min="1">
             </div>
+            <div class="field">
+              <label for="item-station-select">Kitchen station</label>
+              <select class="select" id="item-station-select"></select>
+            </div>
+            <div class="field">
+              <label for="item-target-input">Target prep time (min)</label>
+              <input type="number" class="input" id="item-target-input" min="1" max="180" placeholder="e.g. 8">
+            </div>
+            <div class="field">
+              <label for="item-brand-input">Brand (virtual brand online)</label>
+              <input type="text" class="input" id="item-brand-input" maxlength="40" placeholder="Leave blank for the outlet name">
+            </div>
+            <label class="check" style="align-self:end;"><input type="checkbox" id="item-online-check" checked> Sell on Swiggy / Zomato</label>
           </div>
 
           <div class="form-section">
@@ -837,6 +888,16 @@
                 <option value="pcs">pcs</option><option value="pack">pack</option>
                 <option value="bottle">bottle</option><option value="dozen">dozen</option>
               </select>
+            </div>
+            <div class="field">
+              <label for="mat-category">Category</label>
+              <select class="select" id="mat-category"></select>
+              <span class="hint">“Semi-finished” items (sauces, dressings) are made in Production.</span>
+            </div>
+            <div class="field">
+              <label for="mat-shelf">Shelf life (days)</label>
+              <input type="number" class="input" id="mat-shelf" min="0" step="1" value="0">
+              <span class="hint">Sets the use-by date at receipt. 0 = no expiry tracking.</span>
             </div>
             <div class="field" id="mat-opening-field">
               <label for="mat-stock">Opening stock</label>
@@ -1022,7 +1083,7 @@
           <p class="muted" style="margin-bottom:12px;font-size:13px;">Enter what actually arrived. Anything not delivered stays pending on the order. Stock is added immediately and each material's cost is updated to this order's rate.</p>
           <div class="table-wrap cards">
             <table class="table responsive">
-              <thead><tr><th>Material</th><th>Ordered</th><th>Already received</th><th>Pending</th><th style="width:150px;">Receiving now</th></tr></thead>
+              <thead><tr><th>Material</th><th>Ordered</th><th>Pending</th><th style="width:140px;">Receiving now</th><th style="width:120px;">Invoice rate (₹)</th><th>Temp OK</th><th>Quality OK</th></tr></thead>
               <tbody id="grn-lines"></tbody>
             </table>
           </div>
@@ -1123,9 +1184,10 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js" defer></script>
-  <script src="assets/js/upi-qr.js?v=20261117f"></script>
-  <script src="assets/js/seed.js?v=20261117f"></script>
-  <script src="assets/js/admin.js?v=20261117f"></script>
-  <script src="assets/js/dashboard.js?v=20261117f"></script>
+  <script src="assets/js/upi-qr.js?v=20261118b"></script>
+  <script src="assets/js/seed.js?v=20261118b"></script>
+  <script src="assets/js/admin.js?v=20261118b"></script>
+  <script src="assets/js/dashboard.js?v=20261118b"></script>
+  <script src="assets/js/erp.js?v=20261118b"></script>
 </body>
 </html>

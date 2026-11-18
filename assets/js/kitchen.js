@@ -10,6 +10,9 @@ let kdsCountdown    = 5;
 let kdsTimerHandle  = null;
 let kdsCountHandle  = null;
 let kdsElapsedHandles = {};    // { orderId: intervalHandle }
+let kdsStation      = (function () { try { return localStorage.getItem("kds_station") || "All"; } catch (e) { return "All"; } })();
+let kdsRules        = { stations: [], warn_pct: 70, stale_min: 30, block_bill: true };
+let kdsAlerted      = {};
 
 function kdsEscape(str) {
   return String(str == null ? "" : str).replace(/[&<>"']/g, c => ({
@@ -127,11 +130,16 @@ function kdsLoadOrders() {
   })
   .then(r => r.json())
   .then(data => {
-    if (Array.isArray(data)) {
-      kdsOrders = data;
-      kdsRender();
-      kdsUpdateMetrics();
+    const list = Array.isArray(data) ? data : (data && data.tickets);
+    if (!Array.isArray(list)) return;
+    if (!Array.isArray(data)) {
+      kdsRules = { stations: data.stations || [], warn_pct: data.warn_pct || 70, stale_min: data.stale_min || 30, block_bill: !!data.block_bill };
+      kdsRenderStations();
     }
+    kdsOrders = list;
+    kdsRender();
+    kdsUpdateMetrics();
+    kdsAlerts();
   })
   .catch(err => console.error("KDS fetch error:", err));
 }
@@ -147,9 +155,12 @@ function kdsRender() {
 
   let visible = kdsOrders.filter(o => {
     const matchFilter = kdsFilter === "All" || o.status === kdsFilter;
+    const matchStation = kdsStation === "All" || (o.stations || []).includes(kdsStation);
+    if (!matchStation) return false;
     const matchSearch = !search ||
       String(o.table_no).includes(search) ||
-      (o.order_id || "").toLowerCase().includes(search);
+      (o.order_id || "").toLowerCase().includes(search) ||
+      (o.label || "").toLowerCase().includes(search);
     return matchFilter && matchSearch;
   });
 
@@ -181,51 +192,110 @@ function kdsRender() {
   });
 }
 
-function kdsCardHTML(o) {
-  const now      = Date.now();
-  const created  = new Date(o.timestamp).getTime();
-  const elapsedMs = now - created;
-  const warn     = elapsedMs > 15 * 60 * 1000 && o.status !== "Served";
-  const timerStr = formatElapsed(elapsedMs);
+// Time state vs the ticket's own target: ok → warn (at warn_pct of target) → late
+function kdsTimeState(o, ms) {
+  if (o.status === "Served" || o.status === "Ready") return "";
+  const target = (o.target_min || 15) * 60000;
+  if (ms >= target) return "late";
+  if (ms >= target * (kdsRules.warn_pct / 100)) return "warn";
+  return "";
+}
 
-  const itemsHTML = (o.items || []).map(it => `
+function kdsCardHTML(o) {
+  const elapsedMs = Date.now() - new Date(o.timestamp).getTime();
+  const state    = kdsTimeState(o, elapsedMs);
+  const timerStr = formatElapsed(elapsedMs);
+  const items = (o.items || []).filter(it => kdsStation === "All" || it.station === kdsStation);
+  const hidden = (o.items || []).length - items.length;
+
+  const itemsHTML = items.map(it => `
     <div class="kds-item">
       <div class="kds-qty">${it.quantity}</div>
       <div>
         <div class="kds-iname">${kdsEscape(it.name)}</div>
-        ${it.variant ? `<div class="kds-ivar">${kdsEscape(it.variant)}</div>` : ""}
+        <div class="kds-ivar">${it.variant ? kdsEscape(it.variant) + " · " : ""}<span class="kds-stn">${kdsEscape(it.station || "")}</span></div>
       </div>
     </div>
-  `).join("");
+  `).join("") + (hidden ? `<div class="kds-ivar" style="padding:4px 0 0 2px;">+ ${hidden} item(s) at other stations</div>` : "");
 
-  const warnBar = warn ? `<div class="kds-warn-bar">
-    <i class="fas fa-exclamation-triangle"></i> Waiting over 15 minutes!
-  </div>` : "";
+  let warnBar = "";
+  if (o.escalated && o.status !== "Served") warnBar = `<div class="kds-warn-bar late"><i class="fas fa-bell"></i> Stale — over ${kdsRules.stale_min} min, manager alerted</div>`;
+  else if (state === "late") warnBar = `<div class="kds-warn-bar late"><i class="fas fa-exclamation-triangle"></i> Late — target ${o.target_min} min</div>`;
+  else if (state === "warn") warnBar = `<div class="kds-warn-bar"><i class="fas fa-hourglass-half"></i> ${kdsRules.warn_pct}% of the ${o.target_min}-min target used</div>`;
+  const billBar = o.bill_asked && o.status !== "Served" ? `<div class="kds-warn-bar bill"><i class="fas fa-receipt"></i> Guest asked for the bill — serve now${kdsRules.block_bill ? " (bill is waiting)" : ""}</div>` : "";
+  const title = o.label || `Table ${o.table_no}`;
+  const chan = o.channel && o.channel !== "Dine-in" ? `<span class="kds-chan">${kdsEscape(o.channel)}</span>` : "";
 
-  const footerBtns = kdsFooterBtns(o);
-
-  return `<div class="kds-card" data-status="${o.status}" data-id="${o.order_id}">
+  return `<div class="kds-card ${state}" data-status="${o.status}" data-id="${kdsEscape(o.order_id)}">
     <div class="kds-card-head">
       <div class="kds-card-head-left">
-        <div class="kds-table-no">Table ${kdsEscape(o.table_no)}</div>
-        <div class="kds-card-meta">Round ${o.round || 1} &nbsp;·&nbsp; ${formatTime(o.timestamp)}</div>
+        <div class="kds-table-no">${kdsEscape(title)} ${chan}</div>
+        <div class="kds-card-meta">${o.channel && o.channel !== "Dine-in" ? "" : `Round ${o.round || 1} &nbsp;·&nbsp; `}${formatTime(o.timestamp)} &nbsp;·&nbsp; target ${o.target_min || 15} min</div>
       </div>
       <div class="kds-card-head-right">
         <span class="kds-chip chip-${o.status}">${statusIcon(o.status)} ${o.status}</span>
-        <span class="kds-timer ${warn ? "warn" : ""}" id="timer-${o.order_id}">${timerStr}</span>
+        <span class="kds-timer ${state}" id="timer-${kdsEscape(o.order_id)}">${timerStr}</span>
       </div>
     </div>
     <div class="kds-card-body">
       <div class="kds-guest">
         <i class="fas fa-user"></i>
         ${kdsEscape(o.customer_name || "Guest")} &nbsp;·&nbsp;
-        <i class="fas fa-hashtag" style="font-size:10px"></i>${o.order_id}
+        <i class="fas fa-hashtag" style="font-size:10px"></i>${kdsEscape(o.order_id)}
       </div>
       <div class="kds-items">${itemsHTML}</div>
-      ${warnBar}
+      ${billBar}${warnBar}
     </div>
-    <div class="kds-card-foot">${footerBtns}</div>
+    <div class="kds-card-foot">${kdsFooterBtns(o)}<button class="kds-abtn kds-abtn-print" title="Print ticket" aria-label="Print ticket" onclick="kdsPrint('${kdsEscape(o.order_id)}')"><i class="fas fa-print"></i></button></div>
   </div>`;
+}
+
+// Station chips (All + each station from Settings)
+function kdsRenderStations() {
+  const bar = document.getElementById("kds-stations");
+  if (!bar) return;
+  const list = ["All"].concat(kdsRules.stations);
+  if (!list.includes(kdsStation)) kdsStation = "All";
+  const html = list.map(s => `<button class="kds-fbtn kds-sbtn ${s === kdsStation ? "active" : ""}" onclick="kdsSetStation('${kdsEscape(s)}')">${s === "All" ? '<i class="fas fa-layer-group"></i> All stations' : kdsEscape(s)}</button>`).join("");
+  if (bar.dataset.html !== html) { bar.innerHTML = html; bar.dataset.html = html; }
+}
+function kdsSetStation(s) {
+  kdsStation = s;
+  try { localStorage.setItem("kds_station", s); } catch (e) {}
+  kdsRenderStations();
+  kdsRender();
+}
+
+// Beep + toast once for each new bill request / stale ticket
+function kdsAlerts() {
+  kdsOrders.forEach(o => {
+    if (o.status === "Served") return;
+    if (o.bill_asked && !kdsAlerted["b" + o.order_id]) { kdsAlerted["b" + o.order_id] = 1; kdsToast(`${o.label || "Table " + o.table_no}: guest asked for the bill`, "warning"); kdsBeep(); }
+    if (o.escalated && !kdsAlerted["s" + o.order_id]) { kdsAlerted["s" + o.order_id] = 1; kdsToast(`${o.label || "Table " + o.table_no}: ticket is stale`, "error"); kdsBeep(); }
+  });
+}
+function kdsBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator(); osc.frequency.value = 880; osc.connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + 0.25);
+  } catch (e) {}
+}
+
+// Print a ticket for the selected station on the printer attached to this screen
+function kdsPrint(id) {
+  const o = kdsOrders.find(x => String(x.order_id) === String(id));
+  if (!o) return;
+  const items = (o.items || []).filter(it => kdsStation === "All" || it.station === kdsStation);
+  const w = window.open("", "_blank", "width=380,height=600");
+  if (!w) { kdsToast("Allow pop-ups to print tickets", "warning"); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>KOT ${kdsEscape(o.order_id)}</title><style>
+    body{font-family:monospace;width:72mm;margin:0;padding:6px;font-size:13px} h1{font-size:18px;margin:0} .r{display:flex;gap:8px;margin:4px 0} .q{font-weight:bold;min-width:26px}
+    hr{border:0;border-top:1px dashed #000} small{color:#333}</style></head><body>
+    <h1>${kdsEscape(o.label || "Table " + o.table_no)}</h1><small>KOT ${kdsEscape(o.order_id)} · ${formatTime(o.timestamp)}${kdsStation !== "All" ? " · " + kdsEscape(kdsStation) : ""}</small><hr>
+    ${items.map(it => `<div class="r"><span class="q">${it.quantity}×</span><span>${kdsEscape(it.name)}${it.variant ? " (" + kdsEscape(it.variant) + ")" : ""}<br><small>${kdsEscape(it.station || "")}</small></span></div>`).join("")}
+    <hr><small>${kdsEscape(o.customer_name || "")}</small><script>window.onload=function(){window.print();setTimeout(function(){window.close()},300);}<\/script></body></html>`);
+  w.document.close();
 }
 
 function kdsFooterBtns(o) {
@@ -315,9 +385,10 @@ function kdsStartElapsed(o) {
   const created = new Date(o.timestamp).getTime();
   kdsElapsedHandles[o.order_id] = setInterval(() => {
     const ms  = Date.now() - created;
-    const warn = ms > 15 * 60 * 1000;
+    const st = kdsTimeState(o, ms);
     el.textContent = formatElapsed(ms);
-    el.classList.toggle("warn", warn);
+    el.classList.toggle("warn", st === "warn");
+    el.classList.toggle("late", st === "late");
   }, 1000);
 }
 

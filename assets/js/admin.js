@@ -171,13 +171,6 @@ function verifyLogin(e) {
   api("/api/login", { method: "POST", body: { username, password } })
     .then(data => {
       if (data.status !== "success") throw new Error(data.message || "Login failed");
-      if (data.role === "Kitchen") {
-        sessionStorage.setItem("luka_logged_in", "true");
-        sessionStorage.setItem("luka_logged_user", data.username);
-        sessionStorage.setItem("luka_logged_role", data.role);
-        window.location.href = "kitchen.html";
-        return;
-      }
       startApp(data.username, data.role);
       window.showToast(`Welcome back, ${data.username}!`, "success");
     })
@@ -198,11 +191,7 @@ function logoutAdmin() {
 }
 
 async function startApp(username, role) {
-  if (role === "Kitchen") {
-    window.location.href = "kitchen.html";
-    return;
-  }
-  currentUser = { username, role };
+  currentUser = { username, role, perms: {} };
   sessionStorage.setItem("luka_logged_in", "true");
   sessionStorage.setItem("luka_logged_user", username);
   sessionStorage.setItem("luka_logged_role", role);
@@ -214,6 +203,7 @@ async function startApp(username, role) {
   document.getElementById("user-avatar").textContent = (username || "?").charAt(0);
 
   await loadPublicSettings();
+  await loadSessionInfo();
   applyRolePermissions();
   // Show the first screen straight away; the menu loads alongside it
   const fromHash = (location.hash || "").replace("#", "");
@@ -222,6 +212,31 @@ async function startApp(username, role) {
   if (activeTab === "items" || activeTab === "categories") TABS[activeTab].onOpen();
   startOrdersPolling();
   if (allowedTabs().includes("purchasing")) refreshPOBadge();
+  if (window.refreshErpBadges) { refreshErpBadges(); setInterval(() => { if (!document.hidden) refreshErpBadges(); }, 60000); }
+}
+
+// Permissions and outlets for the signed-in user (from the server)
+async function loadSessionInfo() {
+  try {
+    const s = await api("/api/session");
+    currentUser.perms = s.perms || {};
+    currentUser.outlet = s.outlet;
+    currentUser.outlets = s.outlets || [];
+    const wrap = document.getElementById("outlet-switch");
+    const sel = document.getElementById("outlet-select");
+    wrap.classList.toggle("hidden", currentUser.outlets.length < 2);
+    sel.innerHTML = currentUser.outlets.map(o => `<option value="${escapeHTML(o.id)}" ${s.outlet && o.id === s.outlet.id ? "selected" : ""}>${escapeHTML(o.name)}</option>`).join("");
+  } catch (e) { /* keep defaults */ }
+}
+
+function can(perm) {
+  return currentRole() === "Admin" || !!(currentUser.perms && currentUser.perms[perm]);
+}
+
+function switchOutlet(id) {
+  api("/api/erp/outlets", { method: "POST", body: { action: "switch", id } })
+    .then(() => { window.showToast("Outlet switched.", "info"); setTimeout(() => location.reload(), 300); })
+    .catch(err => window.showToast(err.message, "error"));
 }
 
 async function loadPublicSettings() {
@@ -238,15 +253,26 @@ async function loadPublicSettings() {
 
 const TABS = {
   dashboard:  { section: "sec-dashboard",     title: "Dashboard",        roles: ["Admin", "Owner"],                                 onOpen: () => window.loadDashboard && loadDashboard() },
+  pnl:        { section: "sec-pnl",           title: "P&L & food cost",  roles: ["Admin", "Owner"],                                 onOpen: () => ERP.pnl() },
+  counter:    { section: "sec-counter",       title: "Takeaway & delivery", roles: ["Admin", "Owner", "Receptionist"],              onOpen: () => ERP.counter() },
+  stations:   { section: "sec-stations",      title: "Kitchen stations", roles: ["Admin", "Owner", "Kitchen"],                      onOpen: () => ERP.stations() },
   orders:     { section: "sec-table-orders",  title: "Table Orders",     roles: ["Admin", "Owner", "Receptionist", "Waiter"],       onOpen: () => { renderTablesGrid(); loadAdminTableOrders(); } },
   invoices:   { section: "sec-invoices",      title: "Sales Invoices",   roles: ["Admin", "Owner", "Receptionist"],                 onOpen: () => loadHistoricalInvoices() },
   customers:  { section: "sec-customers",     title: "Customers",        roles: ["Admin", "Owner", "Receptionist"],                 onOpen: () => loadCustomers() },
   items:      { section: "sec-items",         title: "Menu Items",       roles: ["Admin", "Owner", "Receptionist", "Waiter"],       onOpen: () => renderAdminItems() },
   categories: { section: "sec-categories",    title: "Categories",       roles: ["Admin", "Owner"],                                 onOpen: () => renderAdminCategories() },
   inventory:  { section: "sec-inventory",     title: "BOM & Inventory",  roles: ["Admin", "Owner", "Receptionist"], needsBom: true, onOpen: () => loadInventory() },
+  costing:    { section: "sec-costing",       title: "Recipe costing",   roles: ["Admin", "Owner", "Receptionist", "Kitchen"], needsBom: true, onOpen: () => ERP.costing() },
+  counts:     { section: "sec-counts",        title: "Stock counts & transfers", roles: ["Admin", "Owner", "Receptionist", "Kitchen"], needsBom: true, onOpen: () => ERP.counts() },
+  wastage:    { section: "sec-wastage",       title: "Wastage",          roles: ["Admin", "Owner", "Receptionist", "Kitchen"], needsBom: true, onOpen: () => ERP.wastage() },
+  production: { section: "sec-production",    title: "Production & labels", roles: ["Admin", "Owner", "Receptionist", "Kitchen"], needsBom: true, onOpen: () => ERP.production() },
   purchasing: { section: "sec-purchasing",    title: "Purchasing",       roles: ["Admin", "Owner", "Receptionist"], needsBom: true, onOpen: () => loadPurchasing() },
   users:      { section: "sec-users",         title: "Users",            roles: ["Admin"],                                          onOpen: () => loadUsers() },
+  perms:      { section: "sec-perms",         title: "Permissions & limits", roles: ["Admin", "Owner"],                             onOpen: () => ERP.perms() },
   logs:       { section: "sec-logs",          title: "Audit Log",        roles: ["Admin", "Owner"],                                 onOpen: () => loadAuditLogs() },
+  safety:     { section: "sec-safety",        title: "Food safety",      roles: ["Admin", "Owner", "Receptionist", "Kitchen"],      onOpen: () => ERP.safety() },
+  staff:      { section: "sec-staff",         title: "Staff & shifts",   roles: ["Admin", "Owner", "Receptionist"],                 onOpen: () => ERP.staff() },
+  outlets:    { section: "sec-outlets",       title: "Outlets",          roles: ["Admin", "Owner"],                                 onOpen: () => ERP.outlets() },
   settings:   { section: "sec-settings",      title: "Settings",         roles: ["Admin"],                                          onOpen: () => loadSettings() },
 };
 let activeTab = null;
@@ -276,7 +302,7 @@ function applyRolePermissions() {
     btn.classList.toggle("hidden", !allowed.includes(btn.dataset.tab));
   });
   const kitchenLink = document.querySelector('.nav-link[data-link="kitchen"]');
-  if (kitchenLink) kitchenLink.classList.toggle("hidden", !["Admin", "Owner"].includes(role));
+  if (kitchenLink) kitchenLink.classList.toggle("hidden", !["Admin", "Owner", "Kitchen"].includes(role));
   // Hide empty groups
   document.querySelectorAll(".nav-group").forEach(g => {
     const visible = [...g.querySelectorAll(".nav-link")].some(l => !l.classList.contains("hidden"));
@@ -453,6 +479,9 @@ function resetItemForm() {
   renderMediaPreviews();
   document.getElementById("price-variants-container").innerHTML = "";
   addPriceVariantRow("Portion", "");
+  const stations = (window.ERP && ERP.rules && ERP.rules.stations) || ["Fry", "Cold", "Hot", "Bar"];
+  document.getElementById("item-station-select").innerHTML = '<option value="">Automatic (Bar for drinks, Hot for food)</option>' + stations.map(x => `<option>${escapeHTML(x)}</option>`).join("");
+  document.getElementById("item-online-check").checked = true;
 }
 
 function editItem(itemId) {
@@ -468,6 +497,10 @@ function editItem(itemId) {
   document.getElementById("item-avail-select").value = item.availability;
   document.getElementById("item-status-select").value = item.status;
   document.getElementById("item-order-input").value = item.display_order || 1;
+  document.getElementById("item-station-select").value = item.station || "";
+  document.getElementById("item-target-input").value = item.target_min || "";
+  document.getElementById("item-brand-input").value = item.brand || "";
+  document.getElementById("item-online-check").checked = item.online !== false;
   const tags = item.tags || [];
   document.getElementById("tag-veg-check").checked = tags.includes("Veg");
   document.getElementById("tag-nonveg-check").checked = tags.includes("Non-Veg");
@@ -537,15 +570,26 @@ function saveItem(e) {
   if (idInput) {
     const idx = items.findIndex(i => i.id === idInput);
     if (idx !== -1) {
-      items[idx] = { ...items[idx], name, category_id: categoryId, description, tags, availability, status, display_order: displayOrder, media: currentUploadedMedia, price_variants };
+      items[idx] = { ...items[idx], name, category_id: categoryId, description, tags, availability, status, display_order: displayOrder, media: currentUploadedMedia, price_variants, ...channelFields() };
     }
   } else {
-    items.push({ id: `item-${Date.now()}`, category_id: categoryId, name, description, tags, availability, media: currentUploadedMedia, price_variants, display_order: displayOrder, status });
+    items.push({ id: `item-${Date.now()}`, category_id: categoryId, name, description, tags, availability, media: currentUploadedMedia, price_variants, display_order: displayOrder, status, ...channelFields() });
   }
   saveMenuData(idInput ? `Updated menu item: "${name}"` : `Added new menu item: "${name}"`);
   closeItemForm();
   renderAdminItems();
   renderAdminCategories();
+}
+
+// Kitchen station, target time, virtual brand and online availability
+function channelFields() {
+  const t = parseInt(document.getElementById("item-target-input").value, 10);
+  return {
+    station: document.getElementById("item-station-select").value || undefined,
+    target_min: t > 0 ? Math.min(180, t) : undefined,
+    brand: document.getElementById("item-brand-input").value.trim() || undefined,
+    online: document.getElementById("item-online-check").checked,
+  };
 }
 
 function deleteItem(itemId) {
@@ -899,6 +943,11 @@ function loadAdminTableOrders(silent = false) {
     .catch(err => { if (silent !== true) window.showToast(`Could not load orders: ${err.message}`, "error"); });
 }
 
+// Open session for a table number at the current outlet
+function sessionFor(no) {
+  return Object.values(activeOrdersList).find(x => x && String(x.table_no) === String(no));
+}
+
 function updateBillBadge() {
   const n = Object.values(activeOrdersList).filter(s => s && s.status === "Checkout Requested").length;
   const badge = document.getElementById("nav-bill-badge");
@@ -919,7 +968,7 @@ function tableNumbers() {
 function renderTablesGrid() {
   const container = document.getElementById("admin-tables-grid");
   container.innerHTML = tableNumbers().map(no => {
-    const s = activeOrdersList[`table_${no}`];
+    const s = sessionFor(no);
     const busy = s && s.orders && s.orders.length > 0;
     const seated = !!s && !busy;
     const bill = s && s.status === "Checkout Requested";
@@ -943,7 +992,7 @@ function selectTable(no) {
 function showTableDetail(tableNo) {
   const empty = document.getElementById("table-detail-empty-state");
   const content = document.getElementById("table-detail-content");
-  const session = activeOrdersList[`table_${tableNo}`];
+  const session = sessionFor(tableNo);
 
   if (!session) {
     content.classList.add("hidden");
@@ -964,8 +1013,8 @@ function showTableDetail(tableNo) {
     (session.pin ? `<span title="Guests at this table can join the bill with this PIN"><span class="pin-chip"><i class="fas fa-key"></i>PIN ${escapeHTML(session.pin)}</span></span>` : "");
   const role = currentRole();
   document.getElementById("btn-generate-bill").classList.toggle("hidden", role === "Waiter");
-  document.getElementById("btn-close-table").classList.toggle("hidden", !["Admin", "Owner"].includes(role));
-  const canVoid = ["Admin", "Owner", "Receptionist"].includes(role);
+  document.getElementById("btn-close-table").classList.toggle("hidden", !can("void"));
+  const canVoid = can("void");
 
   document.getElementById("btn-generate-bill").classList.toggle("hidden", role === "Waiter" || !session.orders.length);
   let running = 0;
@@ -1010,7 +1059,7 @@ function voidItem(tableNo, orderId, index, qty, name) {
 
 function closeTableNoBill() {
   const no = selectedAdminTableNo;
-  const s = activeOrdersList[`table_${no}`];
+  const s = sessionFor(no);
   if (!s) return;
   const reason = prompt(`Close Table ${no} WITHOUT a bill?\n\nUse this only for walk-outs, test orders or a table that was left open by mistake. Any items on it are voided and this is recorded in the audit log.\n\nReason:`, "");
   if (reason === null) return;
@@ -1033,6 +1082,7 @@ function updateAdminOrderStatus(tableNo, orderId, status) {
 let currentCheckoutBill = null;   // live bill being settled
 let activeReceiptObject = null;   // whatever the bill modal is showing (for PDF)
 let payments = [];                // [{label, method, amount, reference}]
+let billBlocked = false;          // food still being prepared (rule: block bill until served)
 
 const METHOD_ICONS = { UPI: "fa-qrcode", Cash: "fa-money-bill-wave", Card: "fa-credit-card" };
 
@@ -1097,7 +1147,7 @@ function fillReceipt(r, opts) {
 }
 
 function applyBill(bill) {
-  const session = activeOrdersList[`table_${selectedAdminTableNo}`] || {};
+  const session = sessionFor(selectedAdminTableNo) || {};
   currentCheckoutBill = { table_no: selectedAdminTableNo, ...bill };
   activeReceiptObject = {
     invoice_id: `BILL-T${selectedAdminTableNo}-${Date.now()}`,
@@ -1121,7 +1171,7 @@ function applyBill(bill) {
 }
 
 function checkoutTable() {
-  if (!activeOrdersList[`table_${selectedAdminTableNo}`]) return;
+  if (!sessionFor(selectedAdminTableNo)) return;
   // Fresh settings each time (UPI ID, payment methods, charges may have changed)
   loadPublicSettings()
     .then(() => api(`/api/orders/bill-preview?table=${encodeURIComponent(selectedAdminTableNo)}`))
@@ -1129,6 +1179,9 @@ function checkoutTable() {
       applyBill(bill);
       document.getElementById("disc-value").value = "";
       document.getElementById("disc-reason").value = "";
+      document.querySelector("#pay-panel .disc-row").classList.toggle("hidden", !can("discount"));
+      const sess = sessionFor(selectedAdminTableNo) || {};
+      billBlocked = !!(window.ERP && ERP.rules && ERP.rules.block_bill_until_served) && sess.all_served === false;
       document.getElementById("bill-modal-title").textContent = `Table ${selectedAdminTableNo} · Bill & payment`;
       document.getElementById("bill-layout").classList.remove("view-only");
       document.getElementById("pay-panel").classList.remove("hidden");
@@ -1242,7 +1295,9 @@ function updatePaymentSummary() {
   const missingMethod = payments.findIndex(p => !p.method);
   const badAmount = payments.some(p => !(p.amount > 0));
   let ok = false, msg;
-  if (Math.abs(diff) > 0.009) {
+  if (billBlocked) {
+    msg = `<span><i class="fas fa-fire-burner"></i> Some food is still being prepared. Mark every round <b>Served</b> before settling.</span>`;
+  } else if (Math.abs(diff) > 0.009) {
     msg = diff > 0
       ? `<span><i class="fas fa-circle-exclamation"></i> ${inr(diff)} still to collect</span><button type="button" class="btn btn-secondary btn-sm" onclick="fillBalance()">Add to last</button>`
       : `<span><i class="fas fa-circle-exclamation"></i> ${inr(-diff)} more than the bill</span><button type="button" class="btn btn-secondary btn-sm" onclick="fillBalance()">Fix last</button>`;
@@ -1497,6 +1552,9 @@ function openMaterialForm(id) {
   document.getElementById("mat-stock").value = m ? m.stock : 0;
   document.getElementById("mat-reorder").value = m ? m.reorder_level : 0;
   document.getElementById("mat-cost").value = m ? m.cost_per_unit : 0;
+  const cats = ["Veg", "Grocery", "Dairy", "Meat", "Seafood", "Beer", "Liquor", "Beverage", "Packaging", "Semi-finished", "Other"];
+  document.getElementById("mat-category").innerHTML = cats.map(c => `<option ${m && m.category === c ? "selected" : (!m && c === "Grocery" ? "selected" : "")}>${c}</option>`).join("");
+  document.getElementById("mat-shelf").value = m ? (m.shelf_life_days || 0) : 0;
   // Stock of an existing material changes through "Adjust", so every change is in the ledger
   document.getElementById("mat-opening-field").classList.toggle("hidden", !!m);
   openModal("material-modal");
@@ -1511,6 +1569,8 @@ function saveMaterial(e) {
     stock: parseFloat(document.getElementById("mat-stock").value) || 0,
     reorder_level: parseFloat(document.getElementById("mat-reorder").value) || 0,
     cost_per_unit: parseFloat(document.getElementById("mat-cost").value) || 0,
+    category: document.getElementById("mat-category").value,
+    shelf_life_days: parseInt(document.getElementById("mat-shelf").value, 10) || 0,
   };
   api("/api/inventory", { method: "POST", body: { action: "save", material } })
     .then(() => { closeModal("material-modal"); window.showToast("Material saved.", "success"); loadInventory(); })
@@ -1618,12 +1678,12 @@ function renderBomEditor() {
   } else if (!ings.length) {
     addIngredientRow();
   } else {
-    ings.forEach(ing => addIngredientRow(ing.material_id, ing.qty));
+    ings.forEach(ing => addIngredientRow(ing.material_id, ing.qty, ing.loss_pct || ""));
   }
   updateBomCost();
 }
 
-function addIngredientRow(materialId = "", qty = "") {
+function addIngredientRow(materialId = "", qty = "", loss = "") {
   if (!inventory.materials.length) {
     window.showToast("Add a raw material first.", "warning");
     return;
@@ -1637,6 +1697,7 @@ function addIngredientRow(materialId = "", qty = "") {
   row.innerHTML = `
     <select class="select ing-mat" onchange="updateBomCost()" aria-label="Material"><option value="">Choose material…</option>${opts}</select>
     <input type="number" class="input ing-qty" min="0" step="any" placeholder="Qty" value="${escapeHTML(qty)}" oninput="updateBomCost()" aria-label="Quantity">
+    <input type="number" class="input ing-loss" min="0" max="90" step="any" placeholder="Loss %" value="${escapeHTML(loss)}" oninput="updateBomCost()" aria-label="Yield loss percent" title="Trim / yield loss %">
     <button type="button" class="btn btn-icon btn-danger-soft" onclick="this.closest('.ing-row').remove(); updateBomCost();" aria-label="Remove"><i class="fas fa-xmark"></i></button>`;
   container.appendChild(row);
 }
@@ -1644,14 +1705,15 @@ function addIngredientRow(materialId = "", qty = "") {
 function readIngredientRows() {
   return [...document.querySelectorAll("#bom-ingredients .ing-row")].map(r => ({
     material_id: r.querySelector(".ing-mat").value,
-    qty: parseFloat(r.querySelector(".ing-qty").value) || 0
+    qty: parseFloat(r.querySelector(".ing-qty").value) || 0,
+    loss_pct: parseFloat(r.querySelector(".ing-loss").value) || 0
   })).filter(x => x.material_id && x.qty > 0);
 }
 
 function recipeCost(ings) {
   return ings.reduce((s, ing) => {
     const m = materialById(ing.material_id);
-    return s + (m ? Number(m.cost_per_unit) * Number(ing.qty) : 0);
+    return s + (m ? Number(m.cost_per_unit) * Number(ing.qty) * (1 + (Number(ing.loss_pct) || 0) / 100) : 0);
   }, 0);
 }
 
@@ -1817,13 +1879,18 @@ let suppliers = [];
 let purchaseOrders = [];
 let poFilter = "open";
 
-const PO_OPEN = ["Draft", "Ordered", "Partially Received"];
+const PO_OPEN = ["Draft", "Awaiting approval", "Ordered", "Partially Received"];
 const PO_BADGE = {
-  "Draft": "", "Ordered": "badge-info", "Partially Received": "badge-warning",
+  "Draft": "", "Awaiting approval": "badge-violet", "Rejected": "badge-danger", "Ordered": "badge-info", "Partially Received": "badge-warning",
   "Received": "badge-success", "Cancelled": "badge-danger", "Closed": "badge-violet"
 };
 
+// Admin, Owner and Receptionist can raise POs; above the limit they need approval
 function canEditPurchasing() {
+  return ["Admin", "Owner", "Receptionist"].includes(currentRole());
+}
+
+function canManagePurchasing() {
   return ["Admin", "Owner"].includes(currentRole());
 }
 
@@ -1884,6 +1951,8 @@ function loadPurchasing() {
 }
 
 function switchPurchasingTab(tab) {
+  if (tab === "scorecard" && window.ERP) ERP.scorecard();
+  if (tab === "rules" && window.ERP) ERP.poRules();
   document.querySelectorAll("#sec-purchasing .tab").forEach(t => t.classList.toggle("active", t.dataset.ptab === tab));
   document.querySelectorAll("#sec-purchasing .subpage").forEach(p => p.classList.toggle("active", p.id === `pur-${tab}`));
 }
@@ -1918,6 +1987,7 @@ function renderPOs() {
   const list = purchaseOrders.filter(p => {
     if (poFilter === "open" && !PO_OPEN.includes(p.status)) return false;
     if (poFilter === "Draft" && p.status !== "Draft") return false;
+    if (poFilter === "Awaiting approval" && p.status !== "Awaiting approval") return false;
     if (poFilter === "closed" && PO_OPEN.includes(p.status)) return false;
     return !q || p.po_number.toLowerCase().includes(q) || (p.supplier_name || "").toLowerCase().includes(q);
   });
@@ -2100,7 +2170,7 @@ function savePO(e) {
       : res)
     .then(res => {
       closeModal("po-modal");
-      window.showToast(place ? `${res.po.po_number} placed with ${res.po.supplier_name}.` : `${res.po.po_number} saved as draft.`, "success");
+      window.showToast(res.needs_approval ? `${res.po.po_number} is above the approval limit — sent for approval.` : place ? `${res.po.po_number} placed with ${res.po.supplier_name}.` : `${res.po.po_number} saved as draft.`, res.needs_approval ? "warning" : "success");
       return loadPurchasing().then(() => openPOView(res.po.id));
     })
     .catch(err => window.showToast(err.message, "error"));
@@ -2175,12 +2245,16 @@ function openPOView(id) {
   const edit = canEditPurchasing();
   const a = [`<button class="btn btn-secondary" onclick="printPO('${jsArg(po.id)}')"><i class="fas fa-print"></i> Print / PDF</button>`];
   if (po.status === "Draft" && edit) {
-    a.push(`<button class="btn btn-danger-soft" onclick="deletePO('${jsArg(po.id)}')"><i class="fas fa-trash"></i> Delete</button>`);
+    if (canManagePurchasing()) a.push(`<button class="btn btn-danger-soft" onclick="deletePO('${jsArg(po.id)}')"><i class="fas fa-trash"></i> Delete</button>`);
     a.push(`<button class="btn btn-secondary" onclick="openPOForm('${jsArg(po.id)}')"><i class="fas fa-pen"></i> Edit</button>`);
     a.push(`<button class="btn btn-primary" onclick="placePO('${jsArg(po.id)}')"><i class="fas fa-paper-plane"></i> Place order</button>`);
   }
+  if (po.status === "Awaiting approval") {
+    a.push(`<button class="btn btn-danger-soft" onclick="approvePO('${jsArg(po.id)}', false)" ${can("approvePO") ? "" : 'disabled title="Needs the Approve purchase orders permission"'}><i class="fas fa-xmark"></i> Reject</button>`);
+    a.push(`<button class="btn btn-primary" onclick="approvePO('${jsArg(po.id)}', true)" ${can("approvePO") ? "" : 'disabled title="Needs the Approve purchase orders permission"'}><i class="fas fa-check"></i> Approve &amp; place</button>`);
+  }
   if (["Ordered", "Partially Received"].includes(po.status)) {
-    if (edit) a.push(`<button class="btn btn-danger-soft" onclick="cancelPO('${jsArg(po.id)}')"><i class="fas fa-ban"></i> ${po.status === "Partially Received" ? "Close short" : "Cancel order"}</button>`);
+    if (canManagePurchasing()) a.push(`<button class="btn btn-danger-soft" onclick="cancelPO('${jsArg(po.id)}')"><i class="fas fa-ban"></i> ${po.status === "Partially Received" ? "Close short" : "Cancel order"}</button>`);
     a.push(`<button class="btn btn-success" onclick="openGRN('${jsArg(po.id)}')"><i class="fas fa-box-open"></i> Receive goods</button>`);
   }
   document.getElementById("po-view-actions").innerHTML = a.join("");
@@ -2195,6 +2269,15 @@ function poAction(body, msg) {
       return loadPurchasing().then(() => { if (res && res.po) openPOView(res.po.id); });
     })
     .catch(err => window.showToast(err.message, "error"));
+}
+
+function approvePO(id, ok) {
+  const po = purchaseOrders.find(p => p.id === id);
+  if (!po) return;
+  let reason = "";
+  if (!ok) { reason = prompt(`Reject ${po.po_number}? Reason:`, ""); if (reason === null) return; }
+  else if (!confirm(`Approve ${po.po_number} (${inr(po.total)}) and place it with ${po.supplier_name}?`)) return;
+  poAction({ action: ok ? "approve" : "reject", id, reason }, ok ? `${po.po_number} approved and placed.` : `${po.po_number} rejected.`);
 }
 
 function placePO(id) {
@@ -2234,12 +2317,14 @@ function openGRN(id) {
     const pending = Math.max(0, round2(l.qty - l.received_qty));
     return `<tr>
       <td data-label="Material" class="strong">${escapeHTML(l.name)}</td>
-      <td data-label="Ordered" class="nowrap">${fmtQty(l.qty)} ${escapeHTML(l.unit)}</td>
-      <td data-label="Already received" class="nowrap muted">${fmtQty(l.received_qty)} ${escapeHTML(l.unit)}</td>
+      <td data-label="Ordered" class="nowrap">${fmtQty(l.qty)} ${escapeHTML(l.unit)} <span class="muted" style="font-size:12px;">@ ${inr(l.rate)}</span></td>
       <td data-label="Pending" class="nowrap strong">${fmtQty(pending)} ${escapeHTML(l.unit)}</td>
       <td data-label="Receiving now"><span style="display:flex;align-items:center;gap:6px;justify-content:flex-end;">
-        <input type="number" class="input grn-input" data-mid="${escapeHTML(l.material_id)}" data-pending="${pending}" min="0" max="${pending}" step="any" value="${pending}" ${pending <= 0 ? "disabled" : ""} aria-label="Quantity received of ${escapeHTML(l.name)}">
+        <input type="number" class="input grn-input" data-mid="${escapeHTML(l.material_id)}" data-pending="${pending}" data-ordered="${l.qty}" min="0" step="any" value="${pending}" ${pending <= 0 ? "disabled" : ""} aria-label="Quantity received of ${escapeHTML(l.name)}">
         <span class="muted" style="font-size:12px;">${escapeHTML(l.unit)}</span></span></td>
+      <td data-label="Invoice rate"><input type="number" class="input grn-rate" min="0" step="any" value="${l.rate}" ${pending <= 0 ? "disabled" : ""} aria-label="Invoice rate for ${escapeHTML(l.name)}" style="width:110px;"></td>
+      <td data-label="Temp OK"><input type="checkbox" class="grn-temp" checked ${pending <= 0 ? "disabled" : ""} aria-label="Temperature OK for ${escapeHTML(l.name)}"></td>
+      <td data-label="Quality OK"><input type="checkbox" class="grn-qual" checked ${pending <= 0 ? "disabled" : ""} aria-label="Quality OK for ${escapeHTML(l.name)}"></td>
     </tr>`;
   }).join("");
   closeModal("po-view-modal");
@@ -2255,13 +2340,16 @@ function saveReceipt(e) {
   const id = document.getElementById("grn-po-id").value;
   const lines = [];
   let over = null;
+  const tol = ((window.ERP && ERP.rules && ERP.rules.qty_tolerance_pct) || 0) / 100;
   document.querySelectorAll("#grn-lines .grn-input:not(:disabled)").forEach(inp => {
+    const tr = inp.closest("tr");
     const q = parseFloat(inp.value) || 0;
-    if (q > parseFloat(inp.dataset.pending) + 0.0005) over = inp;
-    if (q > 0) lines.push({ material_id: inp.dataset.mid, qty: q });
+    if (q > parseFloat(inp.dataset.pending) + parseFloat(inp.dataset.ordered) * tol + 0.0005) over = inp;
+    if (q > 0) lines.push({ material_id: inp.dataset.mid, qty: q, invoice_rate: parseFloat(tr.querySelector(".grn-rate").value) || null,
+                            temp_ok: tr.querySelector(".grn-temp").checked, quality_ok: tr.querySelector(".grn-qual").checked });
   });
   if (over) {
-    window.showToast("You can't receive more than is pending on the order.", "error");
+    window.showToast("That is more than is pending on the order (plus the allowed tolerance).", "error");
     over.focus();
     return;
   }
@@ -2276,7 +2364,11 @@ function saveReceipt(e) {
   } })
     .then(res => {
       closeModal("grn-modal");
-      window.showToast(res.po.status === "Received" ? `${res.po.po_number} fully received — stock updated.` : `Part delivery recorded on ${res.po.po_number} — stock updated.`, "success");
+      const r = res.po.receipts[res.po.receipts.length - 1] || {};
+      const notes = [];
+      if ((r.rejected || []).length) notes.push(`${r.rejected.length} line(s) rejected at QC`);
+      if ((r.rate_alerts || []).length) notes.push(`rate alert: ${r.rate_alerts.map(x => `${x.name} +${x.pct}%`).join(", ")}`);
+      window.showToast((res.po.status === "Received" ? `${res.po.po_number} fully received — stock updated.` : `Delivery recorded on ${res.po.po_number}.`) + (notes.length ? " " + notes.join("; ") : ""), notes.length ? "warning" : "success");
       return loadPurchasing().then(() => openPOView(res.po.id));
     })
     .catch(err => window.showToast(err.message, "error"));
@@ -2408,12 +2500,12 @@ function renderCustomers() {
     <td data-label="Bills">${c.invoices}</td>
     <td data-label="Total spent" class="amount">${inr(c.total_spent)}</td>
     <td data-label="Last visit" class="muted nowrap" style="font-size:13px;">${formatDate(c.last_seen)}</td>
-    <td class="actions"><button class="btn btn-secondary btn-sm" onclick="openCustomer('${jsArg(c.phone)}')"><i class="fas fa-clock-rotate-left"></i> History</button></td>
+    <td class="actions"><button class="btn btn-secondary btn-sm" onclick="openCustomer('${jsArg(c.id)}')"><i class="fas fa-clock-rotate-left"></i> History</button></td>
   </tr>`).join("");
 }
 
-function openCustomer(phone) {
-  api(`/api/customers/detail?phone=${encodeURIComponent(phone)}`)
+function openCustomer(cid) {
+  api(`/api/customers/detail?id=${encodeURIComponent(cid)}`)
     .then(d => {
       const c = d.customer;
       document.getElementById("customer-modal-title").textContent = c.name;
@@ -2448,23 +2540,23 @@ function openCustomer(phone) {
           <thead><tr><th>Date</th><th>Invoice</th><th>Table</th><th>Items</th><th>Total</th><th>Paid by</th></tr></thead>
           <tbody>${rows || emptyRow(6, "No bills yet.")}</tbody></table></div></div>`;
       document.getElementById("customer-modal-actions").innerHTML =
-        (currentRole() === "Admin" ? `<button class="btn btn-danger-soft" onclick="deleteCustomer('${jsArg(c.phone)}')"><i class="fas fa-user-xmark"></i> Delete profile</button>` : "") +
+        (currentRole() === "Admin" ? `<button class="btn btn-danger-soft" onclick="deleteCustomer('${jsArg(c.id)}')"><i class="fas fa-user-xmark"></i> Delete profile</button>` : "") +
         `<button class="btn btn-secondary" onclick="closeModal('customer-modal')">Close</button>
-         <button class="btn btn-primary" onclick="saveCustomer('${jsArg(c.phone)}')"><i class="fas fa-floppy-disk"></i> Save</button>`;
+         <button class="btn btn-primary" onclick="saveCustomer('${jsArg(c.id)}')"><i class="fas fa-floppy-disk"></i> Save</button>`;
       openModal("customer-modal");
     })
     .catch(err => window.showToast(err.message, "error"));
 }
 
-function saveCustomer(phone) {
-  api("/api/customers", { method: "POST", body: { action: "save", phone, name: document.getElementById("cust-name").value.trim(), notes: document.getElementById("cust-notes").value.trim() } })
+function saveCustomer(cid) {
+  api("/api/customers", { method: "POST", body: { action: "save", id: cid, name: document.getElementById("cust-name").value.trim(), notes: document.getElementById("cust-notes").value.trim() } })
     .then(() => { window.showToast("Customer saved.", "success"); closeModal("customer-modal"); loadCustomers(); })
     .catch(err => window.showToast(err.message, "error"));
 }
 
-function deleteCustomer(phone) {
+function deleteCustomer(cid) {
   if (!confirm("Delete this customer's profile? Their past tax invoices are kept, as the law requires.")) return;
-  api("/api/customers", { method: "POST", body: { action: "delete", phone } })
+  api("/api/customers", { method: "POST", body: { action: "delete", id: cid } })
     .then(() => { window.showToast("Customer profile deleted.", "info"); closeModal("customer-modal"); loadCustomers(); })
     .catch(err => window.showToast(err.message, "error"));
 }

@@ -20,6 +20,15 @@ function dbMoney(n) {
 }
 
 let dashWaits = 0;
+// One period for every card and chart (Today / 7 days / 30 days)
+let dbDays = 1;
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("#db-period button").forEach(b => b.addEventListener("click", () => {
+    dbDays = parseInt(b.dataset.d, 10);
+    document.querySelectorAll("#db-period button").forEach(x => x.classList.toggle("active", x === b));
+    loadDashboard();
+  }));
+});
 function loadDashboard() {
   const cards = document.getElementById("db-summary-cards");
   if (typeof Chart === "undefined" && dashWaits < 20) {
@@ -42,12 +51,12 @@ function loadDashboard() {
   });
 
   Promise.all([
-    get("/api/dashboard/summary"),
-    get("/api/dashboard/revenue"),
-    get("/api/dashboard/items"),
-    get("/api/dashboard/categories"),
-    get("/api/dashboard/hourly"),
-    get("/api/dashboard/payments"),
+    get(`/api/dashboard/summary?days=${dbDays}`),
+    get(`/api/dashboard/revenue?days=${Math.max(dbDays, 7)}`),
+    get(`/api/dashboard/items?days=${dbDays}`),
+    get(`/api/dashboard/categories?days=${dbDays}`),
+    get(`/api/dashboard/hourly?days=${dbDays}`),
+    get(`/api/dashboard/payments?days=${dbDays}`),
   ])
   .then(([summary, revenue, items, categories, hourly, payments]) => {
     dashWaits = 0;
@@ -65,16 +74,17 @@ function loadDashboard() {
 }
 
 function renderSummaryCards(d) {
+  const p = d.period_label || "Today";
   const cards = [
-    { icon: "fa-indian-rupee-sign", label: "Today's revenue",   value: dbMoney(d.today_revenue),   fg: "#2f5d5c", bg: "#e7efee" },
-    { icon: "fa-receipt",           label: "Bills today",       value: d.today_invoices || 0,      fg: "#3f7cac", bg: "#e3eef7" },
-    { icon: "fa-chair",             label: "Tables dining now", value: d.active_tables || 0,       fg: "#4f9d69", bg: "#e4f3e9" },
-    { icon: "fa-calculator",        label: "Average bill",      value: dbMoney(d.avg_bill),        fg: "#8e6bbf", bg: "#efe9f7" },
-    { icon: "fa-calendar-days",     label: "Revenue · 30 days", value: dbMoney(d.monthly_revenue), fg: "#d97e4a", bg: "#fbeee5" },
-    { icon: "fa-fire-burner",       label: "Pending in kitchen", value: d.pending_orders || 0,     fg: "#c95b5b", bg: "#f9e6e6" },
+    { icon: "fa-indian-rupee-sign", label: `Revenue · ${p}`,      value: dbMoney(d.revenue),   fg: "#2f5d5c", bg: "#e7efee" },
+    { icon: "fa-receipt",           label: `Bills · ${p}`,        value: d.invoices || 0,      fg: "#3f7cac", bg: "#e3eef7" },
+    { icon: "fa-calculator",        label: `Average bill · ${p}`, value: dbMoney(d.avg_bill),  fg: "#8e6bbf", bg: "#efe9f7" },
+    { icon: "fa-users",             label: `Guests · ${p}`,       value: d.guests || 0,        fg: "#d97e4a", bg: "#fbeee5" },
+    { icon: "fa-chair",             label: "Tables dining · now", value: d.active_tables || 0, fg: "#4f9d69", bg: "#e4f3e9" },
+    { icon: "fa-fire-burner",       label: "Pending in kitchen · now", value: d.pending_orders || 0, fg: "#c95b5b", bg: "#f9e6e6" },
   ];
   if (d.bom_enabled) {
-    cards.push({ icon: "fa-boxes-stacked", label: "Low-stock materials", value: d.low_stock_count || 0, fg: d.low_stock_count ? "#b45309" : "#4f9d69", bg: d.low_stock_count ? "#fef3c7" : "#e4f3e9" });
+    cards.push({ icon: "fa-boxes-stacked", label: "Low-stock materials · now", value: d.low_stock_count || 0, fg: d.low_stock_count ? "#b45309" : "#4f9d69", bg: d.low_stock_count ? "#fef3c7" : "#e4f3e9" });
   }
   document.getElementById("db-summary-cards").innerHTML = cards.map(c => `
     <div class="stat-card">

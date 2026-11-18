@@ -491,7 +491,7 @@ img, video { max-width: 100%; }
 .subpage { display: none; }
 .subpage.active { display: block; }
 .stock-low { color: var(--danger-700); font-weight: 700; }
-.ing-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+.ing-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 0.8fr) auto; gap: 8px; align-items: center; margin-bottom: 8px; }
 .ing-row .unit { font-size: 12.5px; color: var(--muted); }
 .cost-box { display: flex; gap: 16px; flex-wrap: wrap; padding: 12px 14px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--border); margin-top: 12px; font-size: 13px; }
 .cost-box b { font-size: 15px; }
@@ -665,9 +665,61 @@ img, video { max-width: 100%; }
 }
 
 /* ─── Print: only the receipt ───────────────────────────────────────────── */
+/* ─── Kitchen ERP screens ─────────────────────────────────────────────── */
+.erp-page > .card, .erp-page > .grid-2, .erp-page > .grid-2-even, .erp-page > .stats-grid, .erp-page > .notice { margin-bottom: 20px; }
+.erp-page .grid-2 > *, .erp-page .grid-2-even > * { margin-bottom: 0; }
+.erp-page .grid-2 > div > .card + .card { margin-top: 20px; }
+.erp-bars { display: grid; gap: 8px; }
+.erp-bar { display: grid; grid-template-columns: minmax(80px, 1.2fr) 2fr auto; gap: 10px; align-items: center; font-size: 13px; }
+.erp-bar .k { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.erp-bar .t { height: 10px; background: var(--surface-3); border-radius: 999px; overflow: hidden; }
+.erp-bar .t i { display: block; height: 100%; border-radius: 999px; min-width: 2px; }
+.erp-bar .v { font-weight: 700; font-variant-numeric: tabular-nums; }
+.wa-box, .code-box { display: block; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; word-break: break-all; margin: 0; color: var(--text-2); }
+.wa-box { max-height: 280px; overflow: auto; word-break: normal; font-family: inherit; font-size: 13px; }
+.pos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; max-height: 420px; overflow: auto; padding: 2px; }
+.pos-tile { text-align: left; border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius-sm); padding: 10px 12px; cursor: pointer;
+  font: inherit; display: flex; flex-direction: column; gap: 3px; transition: border-color .15s, background .15s; min-height: 64px; }
+.pos-tile b { font-size: 13px; line-height: 1.25; color: var(--text); }
+.pos-tile span { font-size: 12px; color: var(--muted); }
+.pos-tile:hover:not(:disabled) { border-color: var(--primary); background: var(--primary-50); }
+.pos-tile:disabled { opacity: .45; cursor: not-allowed; }
+.cart-lines { display: grid; gap: 10px; margin-bottom: 12px; }
+.cart-line { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.cart-line b { display: block; font-size: 13.5px; } .cart-line small { color: var(--muted); font-size: 12px; }
+.cart-line .qty { display: flex; align-items: center; gap: 6px; } .cart-line .qty span { min-width: 18px; text-align: center; font-weight: 700; }
+.cart-line .amt { font-weight: 700; min-width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
+.cost-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.cost-kpis > div { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; }
+.cost-kpis b { display: block; font-size: 18px; } .cost-kpis span { font-size: 12px; color: var(--muted); }
+.rc-head, .rc-row { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, .8fr) 80px 34px; gap: 8px; align-items: center; }
+.rc-head, .lim-head { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 6px; }
+.rc-row, .lim-row { margin-bottom: 8px; } .rc-cost { font-weight: 700; font-size: 13px; font-variant-numeric: tabular-nums; }
+.lim-head, .lim-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) 34px; gap: 8px; align-items: center; }
+.perm-table td, .perm-table th { vertical-align: middle; }
+.perm-table td:first-child { min-width: 180px; }
+.erp-page .card-footer { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
+.outlet-switch { display: inline-flex; align-items: center; gap: 6px; }
+.outlet-switch select { height: 36px; padding: 0 30px 0 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background-color: var(--surface); font: inherit; font-size: 13px; max-width: 190px; }
+@media (max-width: 640px) {
+  .rc-head { display: none; }
+  .rc-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px; padding-bottom: 8px; border-bottom: 1px dashed var(--border); }
+  .rc-row .rc-mat { grid-column: 1 / -1; }
+  .rc-row .rc-cost { grid-column: 1 / 3; text-align: left; }
+  .ing-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+  .ing-row .ing-mat { grid-column: 1 / -1; }
+  .outlet-switch > i { display: none; }
+  .outlet-switch select { max-width: 112px; min-width: 100px; }
+  .erp-bar { grid-template-columns: minmax(70px, 1fr) 1.2fr auto; }
+  .pos-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+}
+
 @media print {
   body * { visibility: hidden !important; }
   #bill-receipt, #bill-receipt * { visibility: visible !important; }
   #bill-receipt { position: absolute; left: 0; top: 0; width: 100%; border: 0; }
   .receipt-items { max-height: none; overflow: visible; }
 }
+.erp-page .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+@media (max-width: 640px) { .perm-table th, .perm-table td { padding: 10px 8px; } .perm-table td:first-child { min-width: 140px; } }

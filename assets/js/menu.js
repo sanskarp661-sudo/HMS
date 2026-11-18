@@ -610,13 +610,16 @@ let tableSession = null;     // last session data from the server
 let pollHandle = null;
 let publicCfg = { upi_id: "", upi_name: "", service_charge_percent: 10 };
 
-function tokenKey() { return `hms_table_token_${window.activeTableNo}`; }
+// Multi-outlet: table QR codes for other outlets carry ?outlet=ID
+const GUEST_OUTLET = (new URLSearchParams(location.search).get("outlet") || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
+function withOutlet(path) { return GUEST_OUTLET ? path + (path.includes("?") ? "&" : "?") + "outlet=" + encodeURIComponent(GUEST_OUTLET) : path; }
+function tokenKey() { return `hms_table_token_${GUEST_OUTLET ? GUEST_OUTLET + "_" : ""}${window.activeTableNo}`; }
 function getToken() { try { return localStorage.getItem(tokenKey()) || ""; } catch (e) { return ""; } }
 function setToken(t) { try { t ? localStorage.setItem(tokenKey(), t) : localStorage.removeItem(tokenKey()); } catch (e) {} }
 
 function tableFetch(path, opts = {}) {
   const headers = Object.assign({ "Content-Type": "application/json", "X-Table-Token": getToken() }, opts.headers || {});
-  return fetch(path, Object.assign({}, opts, { headers })).then(async res => {
+  return fetch(withOutlet(path), Object.assign({}, opts, { headers })).then(async res => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const err = new Error(data.message || "Something went wrong. Please try again.");
@@ -648,7 +651,7 @@ function initTableCartSystem() {
   } catch (e) { cart = {}; }
   updateCartBadges();
 
-  fetch("/api/settings/public").then(r => r.ok ? r.json() : null).then(cfg => {
+  fetch(withOutlet("/api/settings/public")).then(r => r.ok ? r.json() : null).then(cfg => {
     if (!cfg) return;
     publicCfg = Object.assign(publicCfg, cfg);
     const f = document.getElementById("footer-charges");
@@ -672,7 +675,7 @@ function openWelcome(mode) {
   const modal = document.getElementById("welcome-modal");
   modal.style.display = "flex";
   if (mode) return showWelcomeMode(mode);
-  fetch(`/api/table/status?table=${encodeURIComponent(window.activeTableNo)}`)
+  fetch(withOutlet(`/api/table/status?table=${encodeURIComponent(window.activeTableNo)}`))
     .then(r => r.json())
     .then(st => showWelcomeMode(st && st.busy ? "join" : "start"))
     .catch(() => showWelcomeMode("start"));

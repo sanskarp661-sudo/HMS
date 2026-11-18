@@ -162,6 +162,15 @@
       font-variant-numeric: tabular-nums;
     }
     .kds-timer.warn { background: rgba(251,146,60,0.15); color: #fb923c; }
+    .kds-timer.late { background: rgba(239,68,68,0.18); color: #f87171; }
+    .kds-card.warn { border-color: rgba(251,146,60,0.55); }
+    .kds-card.late { border-color: rgba(239,68,68,0.75); box-shadow: 0 0 0 1px rgba(239,68,68,0.4); }
+    .kds-warn-bar.late { background: rgba(239,68,68,0.15); color: #f87171; }
+    .kds-warn-bar.bill { background: rgba(59,130,246,0.15); color: #93c5fd; margin-top: 8px; }
+    .kds-stn { text-transform: uppercase; letter-spacing: .04em; font-size: 10px; opacity: .8; }
+    .kds-chan { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: rgba(217,126,74,0.2); color: #f0a878; vertical-align: middle; margin-left: 6px; }
+    .kds-stations { padding-bottom: 0; }
+    .kds-abtn-print { flex: 0 0 auto !important; width: 44px; }
 
     .kds-card-body { padding: 12px 14px; }  /* no flex:1 — height fits content */
     .kds-guest { font-size: 13px; color: var(--muted); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
@@ -302,6 +311,9 @@
       <div class="kds-metric m-long"><div class="kds-metric-value" id="m-long">—</div><div class="kds-metric-label">🔥 Longest Pending</div></div>
     </div>
 
+    <!-- Station chips -->
+    <div class="kds-filters kds-stations" id="kds-stations" aria-label="Kitchen stations"></div>
+
     <!-- Filter Bar -->
     <div class="kds-filters">
       <button class="kds-fbtn active" data-filter="All"      onclick="kdsSetFilter(this)">All</button>
@@ -310,7 +322,7 @@
       <button class="kds-fbtn" data-filter="Ready"     onclick="kdsSetFilter(this)">🟢 Ready</button>
       <button class="kds-fbtn" data-filter="Served"    onclick="kdsSetFilter(this)">⬜ Served</button>
       <input type="text" class="kds-search-box" id="kds-search"
-             placeholder="🔍 Search table or order ID..." oninput="kdsRender()">
+             placeholder="🔍 Search table, order or takeaway no..." oninput="kdsRender()">
     </div>
 
     <!-- Orders Grid -->
@@ -318,6 +330,6 @@
   </div>
 
   <div id="kds-toast-c"></div>
-  <script src="assets/js/kitchen.js?v=20261117f"></script>
+  <script src="assets/js/kitchen.js?v=20261118b"></script>
 </body>
 </html>
